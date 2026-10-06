@@ -6,6 +6,7 @@ import br.com.bancinematic.punishment.BanManager;
 import br.com.bancinematic.punishment.MuteData;
 import br.com.bancinematic.punishment.MuteManager;
 import br.com.bancinematic.punishment.PunishmentResult;
+import br.com.bancinematic.punishment.ExecutorIdentity;
 import br.com.bancinematic.util.MessageUtil;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.BeforeEach;
@@ -82,14 +83,15 @@ class PluginWorkflowTest {
         BanManager banManager = new BanManager(plugin, bans, history, DatabaseExecutor.inline());
         MuteManager muteManager = new MuteManager(plugin, mutes, history, DatabaseExecutor.inline());
 
-        assertEquals(PunishmentResult.SUCCESS, banManager.ban(uuid, "TaupaipaiNovo", "teste ban", "console").join());
+        ExecutorIdentity admin = new ExecutorIdentity(UUID.randomUUID(), "Admin123");
+        assertEquals(PunishmentResult.SUCCESS, banManager.ban(uuid, "TaupaipaiNovo", "teste ban", admin).join());
         assertTrue(banManager.isBanned(uuid));
         assertEquals("teste ban", banManager.get(uuid).reason());
         assertTrue(new BanStorage(plugin, database).isBanned(uuid), "Ban precisa sobreviver a um reload.");
-        assertEquals(PunishmentResult.SUCCESS, banManager.unban(uuid, "TaupaipaiNovo", "console").join());
+        assertEquals(PunishmentResult.SUCCESS, banManager.unban(uuid, "TaupaipaiNovo", admin).join());
         assertFalse(banManager.isBanned(uuid));
 
-        assertEquals(PunishmentResult.SUCCESS, muteManager.tempMute(uuid, "TaupaipaiNovo", "spam", "console", 120).join());
+        assertEquals(PunishmentResult.SUCCESS, muteManager.tempMute(uuid, "TaupaipaiNovo", "spam", admin, 120).join());
         MuteData mute = muteManager.get(uuid);
         assertNotNull(mute);
         assertTrue(muteManager.isMuted(uuid));
@@ -97,16 +99,16 @@ class PluginWorkflowTest {
         assertTrue(muteManager.muteNotice(mute).startsWith("TEMPMUTE:spam:"));
         assertTrue(muteManager.muteReminder(mute).startsWith("REMINDER:spam:"));
         assertTrue(new MuteStorage(plugin, database).isMuted(uuid), "Mute precisa sobreviver a um reload.");
-        assertEquals(PunishmentResult.SUCCESS, muteManager.unmute(uuid, "TaupaipaiNovo", "console").join());
+        assertEquals(PunishmentResult.SUCCESS, muteManager.unmute(uuid, "TaupaipaiNovo", admin).join());
         assertFalse(muteManager.isMuted(uuid));
 
         UUID permanentMuteId = UUID.randomUUID();
-        assertEquals(PunishmentResult.SUCCESS, muteManager.mute(permanentMuteId, "Permanente", "reincidência", "console").join());
+        assertEquals(PunishmentResult.SUCCESS, muteManager.mute(permanentMuteId, "Permanente", "reincidência", ExecutorIdentity.console()).join());
         MuteData permanentMute = muteManager.get(permanentMuteId);
         assertEquals("MUTE:reincidência", muteManager.muteNotice(permanentMute));
         assertEquals("REMINDER_PERMANENT:reincidência", muteManager.muteReminder(permanentMute));
         assertEquals("MUTED_PERMANENT:reincidência", muteManager.mutedChatMessage(permanentMute));
-        assertEquals(PunishmentResult.SUCCESS, muteManager.unmute(permanentMuteId, "Permanente", "console").join());
+        assertEquals(PunishmentResult.SUCCESS, muteManager.unmute(permanentMuteId, "Permanente", ExecutorIdentity.console()).join());
 
         var entries = history.getHistoryPage(uuid, 0, 8).entries();
         assertEquals(4, entries.size());
@@ -114,6 +116,10 @@ class PluginWorkflowTest {
         assertEquals("TEMPMUTE", entries.get(1).type());
         assertEquals("UNBAN", entries.get(2).type());
         assertEquals("BAN", entries.get(3).type());
+        assertEquals(admin.uniqueId(), entries.get(3).executorUniqueId());
+        assertEquals("Admin123", entries.get(3).executorName());
+        assertEquals(admin.uniqueId(), entries.get(0).executorUniqueId());
+        assertEquals("CONSOLE", history.getHistoryPage(permanentMuteId, 0, 8).entries().get(0).executorName());
     }
 
     @Test
@@ -147,16 +153,16 @@ class PluginWorkflowTest {
         MuteManager mutes = new MuteManager(plugin, new MuteStorage(plugin, database), history,
                 DatabaseExecutor.inline());
 
-        assertEquals(PunishmentResult.NOT_ACTIVE, bans.unban(uuid, "Alvo", "console").join());
-        assertEquals(PunishmentResult.NOT_ACTIVE, mutes.unmute(uuid, "Alvo", "console").join());
+        assertEquals(PunishmentResult.NOT_ACTIVE, bans.unban(uuid, "Alvo", ExecutorIdentity.console()).join());
+        assertEquals(PunishmentResult.NOT_ACTIVE, mutes.unmute(uuid, "Alvo", ExecutorIdentity.console()).join());
 
-        assertEquals(PunishmentResult.SUCCESS, bans.ban(uuid, "Alvo", "spam", "console").join());
-        assertEquals(PunishmentResult.ALREADY_ACTIVE, bans.ban(uuid, "Alvo", "outra", "console").join());
-        assertEquals(PunishmentResult.ALREADY_ACTIVE, bans.tempBan(uuid, "Alvo", "outra", "console", 60).join());
+        assertEquals(PunishmentResult.SUCCESS, bans.ban(uuid, "Alvo", "spam", ExecutorIdentity.console()).join());
+        assertEquals(PunishmentResult.ALREADY_ACTIVE, bans.ban(uuid, "Alvo", "outra", ExecutorIdentity.console()).join());
+        assertEquals(PunishmentResult.ALREADY_ACTIVE, bans.tempBan(uuid, "Alvo", "outra", ExecutorIdentity.console(), 60).join());
         assertEquals("spam", bans.get(uuid).reason(), "O ban original não pode ser sobrescrito.");
 
-        assertEquals(PunishmentResult.SUCCESS, mutes.mute(uuid, "Alvo", "spam", "console").join());
-        assertEquals(PunishmentResult.ALREADY_ACTIVE, mutes.mute(uuid, "Alvo", "outra", "console").join());
+        assertEquals(PunishmentResult.SUCCESS, mutes.mute(uuid, "Alvo", "spam", ExecutorIdentity.console()).join());
+        assertEquals(PunishmentResult.ALREADY_ACTIVE, mutes.mute(uuid, "Alvo", "outra", ExecutorIdentity.console()).join());
 
         assertEquals(2, history.getHistoryPage(uuid, 0, 8).totalEntries(),
                 "Só o ban e o mute bem-sucedidos entram no histórico.");
@@ -238,8 +244,8 @@ class PluginWorkflowTest {
             PunishmentLogger history = new PunishmentLogger(plugin, database);
             BanManager manager = new BanManager(plugin, new BanStorage(plugin, database), history, executor);
 
-            CompletableFuture<PunishmentResult> first = manager.ban(uuid, "Alvo", "primeiro", "staff-a");
-            CompletableFuture<PunishmentResult> second = manager.ban(uuid, "Alvo", "segundo", "staff-b");
+            CompletableFuture<PunishmentResult> first = manager.ban(uuid, "Alvo", "primeiro", new ExecutorIdentity(UUID.randomUUID(), "staff-a"));
+            CompletableFuture<PunishmentResult> second = manager.ban(uuid, "Alvo", "segundo", new ExecutorIdentity(UUID.randomUUID(), "staff-b"));
             CompletableFuture.allOf(first, second).join();
 
             long successes = java.util.stream.Stream.of(first.join(), second.join())
@@ -265,15 +271,16 @@ class PluginWorkflowTest {
 
         when(history.log(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
-                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any())).thenReturn(false);
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any())).thenReturn(false);
 
         assertEquals(PunishmentResult.STORAGE_ERROR,
-                manager.ban(uuid, "Alvo", "teste", "staff").join());
+                manager.ban(uuid, "Alvo", "teste", ExecutorIdentity.console()).join());
         assertNull(manager.get(uuid), "Um ban sem histórico não deve permanecer ativo.");
 
         assertTrue(storage.put(new BanData(uuid, "Alvo", "teste", "staff", null)));
         assertEquals(PunishmentResult.STORAGE_ERROR,
-                manager.unban(uuid, "Alvo", "staff").join());
+                manager.unban(uuid, "Alvo", ExecutorIdentity.console()).join());
         assertNotNull(manager.get(uuid), "Falha ao registrar /unban deve restaurar o ban anterior.");
     }
 

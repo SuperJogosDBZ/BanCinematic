@@ -110,7 +110,7 @@ public final class HistoryCommand implements CommandExecutor {
                     "type", formatType(entry.type()),
                     "date", date));
             sender.sendMessage(message("reason", "reason", entry.reason()));
-            sender.sendMessage(message("staff", "staff", entry.source()));
+            sender.sendMessage(message("staff", "staff", entry.executorName()));
             sender.sendMessage(message("duration", "duration", duration));
             if (i < entries.size() - 1) sender.sendMessage("");
         }

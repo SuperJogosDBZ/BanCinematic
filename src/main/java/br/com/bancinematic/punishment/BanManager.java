@@ -32,23 +32,23 @@ public final class BanManager {
     public boolean isBanned(UUID uuid) { return storage.isBanned(uuid); }
     public BanData get(UUID uuid) { return storage.get(uuid); }
 
-    public CompletableFuture<PunishmentResult> ban(UUID uuid, String name, String reason, String source) {
-        return run(() -> save(new BanData(uuid, name, reason, source, null),
-                PunishmentType.BAN, null));
+    public CompletableFuture<PunishmentResult> ban(UUID uuid, String name, String reason, ExecutorIdentity executor) {
+        return run(() -> save(new BanData(uuid, name, reason, executor.name(), null),
+                PunishmentType.BAN, executor, null));
     }
 
     public CompletableFuture<PunishmentResult> tempBan(UUID uuid, String name, String reason,
-                                                       String source, long seconds) {
-        return run(() -> save(new BanData(uuid, name, reason, source, Instant.now().plusSeconds(seconds)),
-                PunishmentType.TEMPBAN, TimeUtil.format(seconds, plugin.messages()::get)));
+                                                       ExecutorIdentity executor, long seconds) {
+        return run(() -> save(new BanData(uuid, name, reason, executor.name(), Instant.now().plusSeconds(seconds)),
+                PunishmentType.TEMPBAN, executor, TimeUtil.format(seconds, plugin.messages()::get)));
     }
 
-    public CompletableFuture<PunishmentResult> unban(UUID uuid, String name, String source) {
+    public CompletableFuture<PunishmentResult> unban(UUID uuid, String name, ExecutorIdentity executor) {
         return run(() -> {
             BanData previous = storage.get(uuid);
             if (previous == null) return PunishmentResult.NOT_ACTIVE;
             if (!storage.remove(uuid)) return PunishmentResult.STORAGE_ERROR;
-            if (!logger.log(PunishmentType.UNBAN, uuid, name, "Removido", source, null)) {
+            if (!logger.log(PunishmentType.UNBAN, uuid, name, "Removido", executor.name(), executor, null)) {
                 storage.put(previous);
                 return PunishmentResult.STORAGE_ERROR;
             }
@@ -57,11 +57,11 @@ public final class BanManager {
     }
 
     /** Runs on the database thread, so the existence check and the write cannot interleave. */
-    private PunishmentResult save(BanData data, PunishmentType type, String duration) {
+    private PunishmentResult save(BanData data, PunishmentType type, ExecutorIdentity executor, String duration) {
         UUID uuid = data.uniqueId();
         if (storage.get(uuid) != null) return PunishmentResult.ALREADY_ACTIVE;
         if (!storage.put(data)) return PunishmentResult.STORAGE_ERROR;
-        if (!logger.log(type, uuid, data.name(), data.reason(), data.source(), duration)) {
+        if (!logger.log(type, uuid, data.name(), data.reason(), data.source(), executor, duration)) {
             storage.remove(uuid);
             return PunishmentResult.STORAGE_ERROR;
         }

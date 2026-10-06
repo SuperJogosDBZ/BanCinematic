@@ -2,6 +2,7 @@ package br.com.bancinematic.cinematic;
 
 import br.com.bancinematic.BanCinematicPlugin;
 import br.com.bancinematic.punishment.BanManager;
+import br.com.bancinematic.punishment.ExecutorIdentity;
 import br.com.bancinematic.punishment.PunishmentResult;
 import br.com.bancinematic.util.MessageUtil;
 import br.com.bancinematic.util.TimeUtil;
@@ -75,13 +76,13 @@ public final class BanCinematic implements Listener {
         pending.add(uuid);
 
         String name = target.getName();
-        String sourceName = source.getName();
+        ExecutorIdentity executor = ExecutorIdentity.from(source);
         CompletableFuture<PunishmentResult> saving = duration == null
-                ? banManager.ban(uuid, name, reason, sourceName)
-                : banManager.tempBan(uuid, name, reason, sourceName, duration);
+                ? banManager.ban(uuid, name, reason, executor)
+                : banManager.tempBan(uuid, name, reason, executor, duration);
 
         saving.thenAccept(result -> plugin.runSync(() ->
-                afterBanSaved(source, target, reason, duration, result)));
+                afterBanSaved(source, executor, target, reason, duration, result)));
     }
 
     /**
@@ -89,11 +90,11 @@ public final class BanCinematic implements Listener {
      * from {@code pending} no matter how this ends, so an unexpected error can never leave
      * them stuck as "already running" (which would also block /unban).
      */
-    private void afterBanSaved(CommandSender source, Player target, String reason,
+    private void afterBanSaved(CommandSender source, ExecutorIdentity executor, Player target, String reason,
                                Long duration, PunishmentResult result) {
         UUID uuid = target.getUniqueId();
         try {
-            continueAfterBanSaved(source, target, reason, duration, result);
+            continueAfterBanSaved(source, executor, target, reason, duration, result);
         } catch (RuntimeException error) {
             plugin.getLogger().log(java.util.logging.Level.SEVERE,
                     "Falha ao iniciar a cinemática de " + target.getName()
@@ -105,7 +106,7 @@ public final class BanCinematic implements Listener {
             Player stillOnline = Bukkit.getPlayer(uuid);
             if (stillOnline != null) {
                 try {
-                    punishAndKick(source, stillOnline, reason, duration);
+                    punishAndKick(source, executor, stillOnline, reason, duration);
                 } catch (RuntimeException second) {
                     plugin.getLogger().log(java.util.logging.Level.SEVERE,
                             "Também não foi possível desconectar " + stillOnline.getName() + ".", second);
@@ -116,7 +117,7 @@ public final class BanCinematic implements Listener {
         }
     }
 
-    private void continueAfterBanSaved(CommandSender source, Player target, String reason,
+    private void continueAfterBanSaved(CommandSender source, ExecutorIdentity executor, Player target, String reason,
                                        Long duration, PunishmentResult result) {
         UUID uuid = target.getUniqueId();
 
@@ -132,7 +133,7 @@ public final class BanCinematic implements Listener {
         // If the player disconnected while the database write was in progress,
         // the ban is still safely stored; simply do not start the cinematic.
         if (!target.isOnline()) {
-            banManager.announceBan(target.getName(), reason, source.getName(), duration);
+            banManager.announceBan(target.getName(), reason, executor.name(), duration);
             banManager.sendBanConfirmation(source, target.getName(), reason, duration);
             return;
         }
@@ -143,13 +144,13 @@ public final class BanCinematic implements Listener {
 
         CinematicSettings settings = CinematicSettings.from(plugin.getConfig());
         if (!settings.enabled()) {
-            punishAndKick(source, cinematicTarget, reason, duration);
+            punishAndKick(source, executor, cinematicTarget, reason, duration);
             return;
         }
 
         Location origin = cinematicTarget.getLocation().clone();
         CinematicSession session = new CinematicSession(
-                cinematicTarget, origin, source, reason, duration, settings
+                cinematicTarget, origin, source, executor, reason, duration, settings
         );
         sessions.put(uuid, session);
 
@@ -629,6 +630,7 @@ public final class BanCinematic implements Listener {
 
         punishAndKick(
                 session.source(),
+                session.executor(),
                 target,
                 session.reason(),
                 session.duration()
@@ -767,6 +769,7 @@ public final class BanCinematic implements Listener {
 
     private void punishAndKick(
             CommandSender source,
+            ExecutorIdentity executor,
             Player target,
             String reason,
             Long duration
@@ -778,7 +781,7 @@ public final class BanCinematic implements Listener {
         String finalText = new MessageUtil(plugin).screen(
                 path,
                 reason,
-                source.getName(),
+                executor.name(),
                 target.getName(),
                 duration == null ? "" : TimeUtil.format(duration, plugin.messages()::get)
         );
@@ -792,7 +795,7 @@ public final class BanCinematic implements Listener {
                 plugin.sendStaffMessage(source, plugin.messages().component(failedKick));
                 return;
             }
-            banManager.announceBan(target.getName(), reason, source.getName(), duration);
+            banManager.announceBan(target.getName(), reason, executor.name(), duration);
             banManager.sendBanConfirmation(source, target.getName(), reason, duration);
         };
 

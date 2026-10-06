@@ -1,5 +1,6 @@
 package br.com.bancinematic.cinematic;
 
+import br.com.bancinematic.punishment.ExecutorIdentity;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.command.CommandSender;
@@ -15,6 +16,7 @@ public final class CinematicSession {
     private final UUID playerId;
     private final Location origin;
     private final CommandSender source;
+    private final ExecutorIdentity executor;
     private final String reason;
     private final Long duration;
     private final Player player;
@@ -39,6 +41,7 @@ public final class CinematicSession {
             Player player,
             Location origin,
             CommandSender source,
+            ExecutorIdentity executor,
             String reason,
             Long duration,
             CinematicSettings settings
@@ -47,6 +50,7 @@ public final class CinematicSession {
         this.playerId = player.getUniqueId();
         this.origin = origin.clone();
         this.source = source;
+        this.executor = executor;
         this.reason = reason;
         this.duration = duration;
         this.settings = settings;
@@ -60,6 +64,7 @@ public final class CinematicSession {
     public UUID playerId() { return playerId; }
     public Location origin() { return origin; }
     public CommandSender source() { return source; }
+    public ExecutorIdentity executor() { return executor; }
     public String reason() { return reason; }
     public Long duration() { return duration; }
     public Player player() { return player; }

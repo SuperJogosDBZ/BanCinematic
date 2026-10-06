@@ -62,23 +62,23 @@ public final class MuteManager {
                 .replace("%time%", TimeUtil.formatRemaining(data.expires(), plugin.messages()::get));
     }
 
-    public CompletableFuture<PunishmentResult> mute(UUID uuid, String name, String reason, String source) {
-        return run(() -> save(new MuteData(uuid, name, reason, source, null),
-                PunishmentType.MUTE, null));
+    public CompletableFuture<PunishmentResult> mute(UUID uuid, String name, String reason, ExecutorIdentity executor) {
+        return run(() -> save(new MuteData(uuid, name, reason, executor.name(), null),
+                PunishmentType.MUTE, executor, null));
     }
 
     public CompletableFuture<PunishmentResult> tempMute(UUID uuid, String name, String reason,
-                                                        String source, long seconds) {
-        return run(() -> save(new MuteData(uuid, name, reason, source, Instant.now().plusSeconds(seconds)),
-                PunishmentType.TEMPMUTE, TimeUtil.format(seconds, plugin.messages()::get)));
+                                                        ExecutorIdentity executor, long seconds) {
+        return run(() -> save(new MuteData(uuid, name, reason, executor.name(), Instant.now().plusSeconds(seconds)),
+                PunishmentType.TEMPMUTE, executor, TimeUtil.format(seconds, plugin.messages()::get)));
     }
 
-    public CompletableFuture<PunishmentResult> unmute(UUID uuid, String name, String source) {
+    public CompletableFuture<PunishmentResult> unmute(UUID uuid, String name, ExecutorIdentity executor) {
         return run(() -> {
             MuteData previous = storage.get(uuid);
             if (previous == null) return PunishmentResult.NOT_ACTIVE;
             if (!storage.remove(uuid)) return PunishmentResult.STORAGE_ERROR;
-            if (!logger.log(PunishmentType.UNMUTE, uuid, name, "Removido", source, null)) {
+            if (!logger.log(PunishmentType.UNMUTE, uuid, name, "Removido", executor.name(), executor, null)) {
                 storage.put(previous);
                 return PunishmentResult.STORAGE_ERROR;
             }
@@ -87,11 +87,11 @@ public final class MuteManager {
     }
 
     /** Runs on the database thread, so the existence check and the write cannot interleave. */
-    private PunishmentResult save(MuteData data, PunishmentType type, String duration) {
+    private PunishmentResult save(MuteData data, PunishmentType type, ExecutorIdentity executor, String duration) {
         UUID uuid = data.uniqueId();
         if (storage.get(uuid) != null) return PunishmentResult.ALREADY_ACTIVE;
         if (!storage.put(data)) return PunishmentResult.STORAGE_ERROR;
-        if (!logger.log(type, uuid, data.name(), data.reason(), data.source(), duration)) {
+        if (!logger.log(type, uuid, data.name(), data.reason(), data.source(), executor, duration)) {
             storage.remove(uuid);
             return PunishmentResult.STORAGE_ERROR;
         }

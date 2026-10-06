@@ -3,6 +3,7 @@ package br.com.bancinematic.command;
 import br.com.bancinematic.BanCinematicPlugin;
 import br.com.bancinematic.punishment.MuteManager;
 import br.com.bancinematic.punishment.PunishmentResult;
+import br.com.bancinematic.punishment.ExecutorIdentity;
 import br.com.bancinematic.util.PlayerIdentity;
 import org.bukkit.Bukkit;
 import org.bukkit.command.*;
@@ -33,7 +34,7 @@ public final class UnmuteCommand implements CommandExecutor, TabCompleter {
             return true;
         }
 
-        manager.unmute(uuid, name, sender.getName()).thenAccept(result -> plugin.runSync(() -> {
+        manager.unmute(uuid, name, ExecutorIdentity.from(sender)).thenAccept(result -> plugin.runSync(() -> {
             if (result == PunishmentResult.NOT_ACTIVE) {
                 sender.sendMessage(plugin.messages().get("messages.not-muted"));
             } else if (result != PunishmentResult.SUCCESS) {

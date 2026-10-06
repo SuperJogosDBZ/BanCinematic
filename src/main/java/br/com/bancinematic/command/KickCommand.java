@@ -2,6 +2,7 @@ package br.com.bancinematic.command;
 
 import br.com.bancinematic.BanCinematicPlugin;
 import br.com.bancinematic.punishment.PunishmentType;
+import br.com.bancinematic.punishment.ExecutorIdentity;
 import br.com.bancinematic.storage.PunishmentLogger;
 import br.com.bancinematic.util.MessageUtil;
 import br.com.bancinematic.util.InputLimits;
@@ -56,10 +57,11 @@ public final class KickCommand implements CommandExecutor {
 
         UUID uuid = target.getUniqueId();
         String targetName = target.getName();
-        String sourceName = sender.getName();
+        ExecutorIdentity executor = ExecutorIdentity.from(sender);
+        String sourceName = executor.name();
 
         plugin.databaseExecutor()
-                .submit(() -> logger.log(PunishmentType.KICK, uuid, targetName, reason, sourceName, null))
+                .submit(() -> logger.log(PunishmentType.KICK, uuid, targetName, reason, sourceName, executor, null))
                 .exceptionally(error -> {
                     plugin.getLogger().severe("Falha inesperada ao gravar o kick: " + error);
                     return false;
