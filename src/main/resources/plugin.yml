@@ -1,0 +1,63 @@
+name: BanCinematic
+version: 2.0
+main: br.com.bancinematic.BanCinematicPlugin
+api-version: '1.21'
+author: SuperJogosDBZ
+description: Sistema modular de punições com banimento cinematográfico.
+
+libraries:
+  - org.xerial:sqlite-jdbc:3.53.4.0
+  - com.mysql:mysql-connector-j:26.7.0
+
+commands:
+  ban:
+    description: Bane um jogador.
+    usage: /ban <jogador> <motivo>
+    permission: bancinematic.ban
+  tempban:
+    description: Bane temporariamente um jogador.
+    usage: /tempban <jogador> <tempo> <motivo>
+    permission: bancinematic.tempban
+  unban:
+    description: Remove o banimento de um jogador.
+    usage: /unban <jogador>
+    permission: bancinematic.unban
+  mute:
+    description: Silencia um jogador.
+    usage: /mute <jogador> <motivo>
+    permission: bancinematic.mute
+  tempmute:
+    description: Silencia temporariamente um jogador.
+    usage: /tempmute <jogador> <tempo> <motivo>
+    permission: bancinematic.tempmute
+  unmute:
+    description: Remove o mute de um jogador.
+    usage: /unmute <jogador>
+    permission: bancinematic.unmute
+  kick:
+    description: Expulsa um jogador.
+    usage: /kick <jogador> <motivo>
+    permission: bancinematic.kick
+  history:
+    description: Consulta o histórico de punições de um jogador.
+    usage: /history <jogador> [página]
+    permission: bancinematic.history
+
+permissions:
+  bancinematic.ban:
+    default: op
+  bancinematic.tempban:
+    default: op
+  bancinematic.unban:
+    default: op
+  bancinematic.mute:
+    default: op
+  bancinematic.tempmute:
+    default: op
+  bancinematic.unmute:
+    default: op
+  bancinematic.kick:
+    default: op
+  bancinematic.history:
+    description: Permite consultar o histórico de punições.
+    default: op

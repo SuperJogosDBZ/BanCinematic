@@ -1,0 +1,41 @@
+# Idioma das mensagens: br (português) ou en (inglês).
+language: br
+
+database:
+  # SQLITE é local e não exige servidor. Para MySQL, altere para MYSQL e preencha os dados abaixo.
+  type: SQLITE
+  mysql:
+    host: 127.0.0.1
+    port: 3306
+    database: bancinematic
+    username: root
+    password: ""
+    use-ssl: false
+    allow-public-key-retrieval: false
+    # Limites em milissegundos. Evitam que um MySQL indisponível prenda a fila do plugin.
+    connect-timeout: 5000
+    socket-timeout: 10000
+
+cinematic:
+  enabled: true
+  # Ritmo: aparição -> encara o jogador -> aproximação lenta -> preparação -> golpe -> kick.
+  emerge-ticks: 50
+  stare-ticks: 8
+  windup-ticks: 12
+  attack-animation-ticks: 10
+  camera-turn-delay-ticks: 6
+  camera-yaw-max-step: 6.5
+  camera-pitch-max-step: 3.5
+  # O desaparecimento do Warden dura no mínimo 30 ticks (1,5 s).
+  dissolve-ticks: 30
+  max-seconds: 15
+  darkness: true
+  monster:
+    type: WARDEN
+    scale: 3.0
+    distance: 9.0
+    height-offset: 0.0
+    approach-speed: 0.16
+    attack-distance: 2.5
+  sounds: true
+  particles: true
