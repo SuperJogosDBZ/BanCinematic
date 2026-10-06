@@ -28,6 +28,8 @@ import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
 public final class BanCinematicPlugin extends JavaPlugin {
+    /** Shared message formatter; it reads the current language configuration on every lookup. */
+    private final MessageUtil messages = new MessageUtil(this);
     private BanStorage banStorage;
     private MuteStorage muteStorage;
     private PunishmentLogger punishmentLogger;
@@ -93,7 +95,7 @@ public final class BanCinematicPlugin extends JavaPlugin {
     }
 
     public MessageUtil messages() {
-        return new MessageUtil(this);
+        return messages;
     }
 
     public IdentityStorage identities() {

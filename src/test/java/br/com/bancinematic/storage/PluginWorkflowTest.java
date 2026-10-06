@@ -284,6 +284,50 @@ class PluginWorkflowTest {
      */
     @Test
     void mysqlConnectionWorksWhenIntegrationEnvironmentIsConfigured() throws SQLException {
+        configureMysqlFromEnvironment();
+
+        try (Connection connection = new DatabaseManager(plugin).connect();
+             PreparedStatement statement = connection.prepareStatement("SELECT 1");
+             ResultSet result = statement.executeQuery()) {
+            assertTrue(result.next());
+            assertEquals(1, result.getInt(1));
+        }
+    }
+
+    /**
+     * Verifica o schema e o ciclo de escrita/leitura/remoção no MySQL sem conservar
+     * punições de teste. Só é executado quando BANCINEMATIC_TEST_MYSQL_* estiver configurado.
+     */
+    @Test
+    void mysqlSchemaSupportsBanAndMuteRoundTripsWhenIntegrationEnvironmentIsConfigured() throws SQLException {
+        configureMysqlFromEnvironment();
+        DatabaseManager mysql = new DatabaseManager(plugin);
+        mysql.initialize();
+
+        UUID uuid = UUID.randomUUID();
+        BanStorage bans = new BanStorage(plugin, mysql);
+        MuteStorage mutes = new MuteStorage(plugin, mysql);
+        try {
+            BanData ban = new BanData(uuid, "MySqlIntegration", "teste", "JUnit", null);
+            assertTrue(bans.put(ban));
+            assertEquals("teste", bans.get(uuid).reason());
+            assertTrue(bans.remove(uuid));
+            assertNull(bans.get(uuid));
+
+            MuteData mute = new MuteData(uuid, "MySqlIntegration", "teste", "JUnit", null);
+            assertTrue(mutes.put(mute));
+            assertEquals("teste", mutes.get(uuid).reason());
+            assertTrue(mutes.remove(uuid));
+            assertNull(mutes.get(uuid));
+        } finally {
+            try (Connection connection = mysql.connect()) {
+                deleteTestRecord(connection, "ban_records", "subject_uuid", uuid);
+                deleteTestRecord(connection, "mute_records", "subject_uuid", uuid);
+            }
+        }
+    }
+
+    private void configureMysqlFromEnvironment() {
         String host = System.getenv("BANCINEMATIC_TEST_MYSQL_HOST");
         String databaseName = System.getenv("BANCINEMATIC_TEST_MYSQL_DATABASE");
         String username = System.getenv("BANCINEMATIC_TEST_MYSQL_USERNAME");
@@ -300,12 +344,14 @@ class PluginWorkflowTest {
         config.set("database.mysql.database", databaseName);
         config.set("database.mysql.username", username);
         config.set("database.mysql.password", password);
+    }
 
-        try (Connection connection = new DatabaseManager(plugin).connect();
-             PreparedStatement statement = connection.prepareStatement("SELECT 1");
-             ResultSet result = statement.executeQuery()) {
-            assertTrue(result.next());
-            assertEquals(1, result.getInt(1));
+    private static void deleteTestRecord(Connection connection, String table, String column, UUID uuid)
+            throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "DELETE FROM " + table + " WHERE " + column + " = ?")) {
+            statement.setString(1, uuid.toString());
+            statement.executeUpdate();
         }
     }
 
