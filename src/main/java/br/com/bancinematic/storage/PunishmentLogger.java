@@ -30,9 +30,21 @@ public final class PunishmentLogger {
     public boolean log(PunishmentType type, UUID playerId, String player,
                        String reason, String source, String duration) {
         Objects.requireNonNull(playerId, "A UUID do jogador é obrigatória no histórico.");
+        try (Connection connection = database.connect()) {
+            log(connection, type, playerId, player, reason, source, duration);
+            return true;
+        } catch (SQLException exception) {
+            plugin.getLogger().severe("Não foi possível salvar o histórico de punições: " + exception.getMessage());
+            return false;
+        }
+    }
+
+    void log(Connection connection, PunishmentType type, UUID playerId, String player,
+             String reason, String source, String duration) throws SQLException {
+        Objects.requireNonNull(connection, "A conexão é obrigatória no histórico.");
+        Objects.requireNonNull(playerId, "A UUID do jogador é obrigatória no histórico.");
         Instant punishedAt = Instant.now();
-        try (Connection connection = database.connect();
-             PreparedStatement statement = connection.prepareStatement(
+        try (PreparedStatement statement = connection.prepareStatement(
                      "INSERT INTO punishment_history "
                              + "(id, subject_uuid, punishment_type, player, reason, source, punished_at, duration)"
                              + " VALUES (?, ?, ?, ?, ?, ?, ?, ?)")) {
@@ -45,10 +57,6 @@ public final class PunishmentLogger {
             statement.setString(7, HISTORY_DATE_FORMAT.format(punishedAt));
             statement.setString(8, duration);
             statement.executeUpdate();
-            return true;
-        } catch (SQLException exception) {
-            plugin.getLogger().severe("Não foi possível salvar o histórico de punições: " + exception.getMessage());
-            return false;
         }
     }
 

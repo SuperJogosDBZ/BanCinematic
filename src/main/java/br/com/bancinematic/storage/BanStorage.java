@@ -2,6 +2,7 @@ package br.com.bancinematic.storage;
 
 import br.com.bancinematic.BanCinematicPlugin;
 import br.com.bancinematic.punishment.BanData;
+import br.com.bancinematic.punishment.PunishmentType;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -63,22 +64,7 @@ public final class BanStorage {
         try (Connection connection = database.connect()) {
             connection.setAutoCommit(false);
             try {
-                try (PreparedStatement delete = connection.prepareStatement(
-                        "DELETE FROM ban_records WHERE subject_uuid = ?")) {
-                    delete.setString(1, uuid.toString());
-                    delete.executeUpdate();
-                }
-                try (PreparedStatement statement = connection.prepareStatement(
-                        "INSERT INTO ban_records (subject_uuid, name, reason, source, expires_at)"
-                                + " VALUES (?, ?, ?, ?, ?)")) {
-                    statement.setString(1, uuid.toString());
-                    statement.setString(2, data.name());
-                    statement.setString(3, data.reason());
-                    statement.setString(4, data.source());
-                    if (data.expires() == null) statement.setNull(5, java.sql.Types.BIGINT);
-                    else statement.setLong(5, data.expires().toEpochMilli());
-                    statement.executeUpdate();
-                }
+                replace(connection, data);
                 connection.commit();
             } catch (SQLException exception) {
                 rollback(connection, exception);
@@ -93,15 +79,56 @@ public final class BanStorage {
         return true;
     }
 
+    public synchronized boolean putAndLog(BanData data, PunishmentType type, String duration,
+                                          PunishmentLogger history) {
+        UUID uuid = data.uniqueId();
+        try (Connection connection = database.connect()) {
+            connection.setAutoCommit(false);
+            try {
+                replace(connection, data);
+                history.log(connection, type, uuid, data.name(), data.reason(), data.source(), duration);
+                connection.commit();
+            } catch (SQLException exception) {
+                rollback(connection, exception);
+                throw exception;
+            }
+        } catch (SQLException exception) {
+            plugin.getLogger().severe("Não foi possível salvar o ban e seu histórico: "
+                    + exception.getMessage());
+            return false;
+        }
+        bans.put(uuid, data);
+        return true;
+    }
+
     public synchronized boolean remove(UUID uuid) {
         if (uuid == null) return false;
-        try (Connection connection = database.connect();
-             PreparedStatement statement = connection.prepareStatement(
-                     "DELETE FROM ban_records WHERE subject_uuid = ?")) {
-            statement.setString(1, uuid.toString());
-            statement.executeUpdate();
+        try (Connection connection = database.connect()) {
+            delete(connection, uuid);
         } catch (SQLException exception) {
             plugin.getLogger().severe("Não foi possível remover o ban do banco: " + exception.getMessage());
+            return false;
+        }
+        bans.remove(uuid);
+        return true;
+    }
+
+    public synchronized boolean removeAndLog(UUID uuid, String player, String reason, String source,
+                                             PunishmentType type, PunishmentLogger history) {
+        if (uuid == null) return false;
+        try (Connection connection = database.connect()) {
+            connection.setAutoCommit(false);
+            try {
+                delete(connection, uuid);
+                history.log(connection, type, uuid, player, reason, source, null);
+                connection.commit();
+            } catch (SQLException exception) {
+                rollback(connection, exception);
+                throw exception;
+            }
+        } catch (SQLException exception) {
+            plugin.getLogger().severe("Não foi possível remover o ban e salvar seu histórico: "
+                    + exception.getMessage());
             return false;
         }
         bans.remove(uuid);
@@ -126,6 +153,34 @@ public final class BanStorage {
             connection.rollback();
         } catch (SQLException exception) {
             original.addSuppressed(exception);
+        }
+    }
+
+    private static void replace(Connection connection, BanData data) throws SQLException {
+        UUID uuid = data.uniqueId();
+        try (PreparedStatement delete = connection.prepareStatement(
+                "DELETE FROM ban_records WHERE subject_uuid = ?")) {
+            delete.setString(1, uuid.toString());
+            delete.executeUpdate();
+        }
+        try (PreparedStatement statement = connection.prepareStatement(
+                "INSERT INTO ban_records (subject_uuid, name, reason, source, expires_at)"
+                        + " VALUES (?, ?, ?, ?, ?)")) {
+            statement.setString(1, uuid.toString());
+            statement.setString(2, data.name());
+            statement.setString(3, data.reason());
+            statement.setString(4, data.source());
+            if (data.expires() == null) statement.setNull(5, java.sql.Types.BIGINT);
+            else statement.setLong(5, data.expires().toEpochMilli());
+            statement.executeUpdate();
+        }
+    }
+
+    private static void delete(Connection connection, UUID uuid) throws SQLException {
+        try (PreparedStatement statement = connection.prepareStatement(
+                "DELETE FROM ban_records WHERE subject_uuid = ?")) {
+            statement.setString(1, uuid.toString());
+            statement.executeUpdate();
         }
     }
 

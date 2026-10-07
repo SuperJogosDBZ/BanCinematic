@@ -29,6 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -75,6 +76,8 @@ class PluginWorkflowTest {
         assertNull(identities.resolve("NuncaEntrou"));
         assertEquals(uuid, new IdentityStorage(plugin, database).resolve("taupaipai"),
                 "Nick antigo deve continuar relacionado à mesma UUID após recarregar do banco.");
+        assertFalse(tableExists("player_identities"),
+                "A tabela não utilizada de identidade atual não deve ser criada.");
 
         BanStorage bans = new BanStorage(plugin, database);
         MuteStorage mutes = new MuteStorage(plugin, database);
@@ -271,18 +274,44 @@ class PluginWorkflowTest {
         PunishmentLogger history = mock(PunishmentLogger.class);
         BanManager manager = new BanManager(plugin, storage, history, DatabaseExecutor.inline());
 
-        when(history.log(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
-                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any())).thenReturn(false);
+        doThrow(new SQLException("histórico indisponível")).when(history).log(
+                org.mockito.ArgumentMatchers.any(Connection.class),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any());
 
         assertEquals(PunishmentResult.STORAGE_ERROR,
                 manager.ban(uuid, "Alvo", "teste", "CONSOLE").join());
         assertNull(manager.get(uuid), "Um ban sem histórico não deve permanecer ativo.");
+        assertEquals(0, countRows("ban_records", uuid),
+                "A transação deve desfazer o ban quando a escrita do histórico falha.");
 
         assertTrue(storage.put(new BanData(uuid, "Alvo", "teste", "staff", null)));
         assertEquals(PunishmentResult.STORAGE_ERROR,
                 manager.unban(uuid, "Alvo", "CONSOLE").join());
         assertNotNull(manager.get(uuid), "Falha ao registrar /unban deve restaurar o ban anterior.");
+        assertEquals(1, countRows("ban_records", uuid),
+                "A transação deve preservar o ban quando o histórico de /unban falha.");
+
+        UUID muteId = UUID.randomUUID();
+        MuteStorage muteStorage = new MuteStorage(plugin, database);
+        MuteManager muteManager = new MuteManager(plugin, muteStorage, history, DatabaseExecutor.inline());
+        assertEquals(PunishmentResult.STORAGE_ERROR,
+                muteManager.mute(muteId, "Mutado", "teste", "CONSOLE").join());
+        assertNull(muteManager.get(muteId), "Um mute sem histórico não deve permanecer ativo.");
+        assertEquals(0, countRows("mute_records", muteId),
+                "A transação deve desfazer o mute quando a escrita do histórico falha.");
+
+        assertTrue(muteStorage.put(new MuteData(muteId, "Mutado", "teste", "staff", null)));
+        assertEquals(PunishmentResult.STORAGE_ERROR,
+                muteManager.unmute(muteId, "Mutado", "CONSOLE").join());
+        assertNotNull(muteManager.get(muteId),
+                "Falha ao registrar /unmute deve preservar o mute anterior.");
+        assertEquals(1, countRows("mute_records", muteId),
+                "A transação deve preservar o mute quando o histórico de /unmute falha.");
     }
 
     @Test
@@ -307,25 +336,27 @@ class PluginWorkflowTest {
         BanStorage bans = new BanStorage(plugin, mysql);
         MuteStorage mutes = new MuteStorage(plugin, mysql);
         PunishmentLogger history = new PunishmentLogger(plugin, mysql);
+        BanManager banManager = new BanManager(plugin, bans, history, DatabaseExecutor.inline());
+        MuteManager muteManager = new MuteManager(plugin, mutes, history, DatabaseExecutor.inline());
         try {
-            BanData ban = new BanData(uuid, "MySqlIntegration", "teste", "JUnit", null);
-            assertTrue(bans.put(ban));
+            assertEquals(PunishmentResult.SUCCESS,
+                    banManager.ban(uuid, "MySqlIntegration", "teste", "MySqlAdmin").join());
             assertEquals("teste", bans.get(uuid).reason());
-            assertTrue(bans.remove(uuid));
+            assertEquals(PunishmentResult.SUCCESS,
+                    banManager.unban(uuid, "MySqlIntegration", "MySqlAdmin").join());
             assertNull(bans.get(uuid));
 
-            MuteData mute = new MuteData(uuid, "MySqlIntegration", "teste", "JUnit", null);
-            assertTrue(mutes.put(mute));
+            assertEquals(PunishmentResult.SUCCESS,
+                    muteManager.mute(uuid, "MySqlIntegration", "teste", "MySqlAdmin").join());
             assertEquals("teste", mutes.get(uuid).reason());
-            assertTrue(mutes.remove(uuid));
+            assertEquals(PunishmentResult.SUCCESS,
+                    muteManager.unmute(uuid, "MySqlIntegration", "MySqlAdmin").join());
             assertNull(mutes.get(uuid));
 
-            assertTrue(history.log(br.com.bancinematic.punishment.PunishmentType.BAN, uuid,
-                    "MySqlIntegration", "teste", "MySqlAdmin", null));
             assertTrue(history.log(br.com.bancinematic.punishment.PunishmentType.KICK, uuid,
                     "MySqlIntegration", "teste", "CONSOLE", null));
             var entries = history.getHistoryPage(uuid, 0, 8).entries();
-            assertEquals(2, entries.size());
+            assertEquals(5, entries.size());
             var consoleEntry = entries.stream()
                     .filter(entry -> "CONSOLE".equals(entry.source())).findFirst().orElseThrow();
             var playerEntry = entries.stream()
@@ -377,6 +408,13 @@ class PluginWorkflowTest {
                 result.next();
                 return result.getInt(1);
             }
+        }
+    }
+
+    private boolean tableExists(String table) throws SQLException {
+        try (Connection connection = database.connect(); ResultSet tables = connection.getMetaData()
+                .getTables(null, null, table, new String[]{"TABLE"})) {
+            return tables.next();
         }
     }
 

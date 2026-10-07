@@ -69,23 +69,26 @@ public final class KickCommand implements CommandExecutor {
                         sender.sendMessage(plugin.messages().get("messages.storage-error"));
                         return;
                     }
-                    if (!target.isOnline()) {
+                    Player currentTarget = Bukkit.getPlayer(uuid);
+                    if (currentTarget == null) {
                         sender.sendMessage(plugin.messages().get("messages.player-not-found"));
                         return;
                     }
+
+                    String currentTargetName = currentTarget.getName();
 
                     String finalMessage = plugin.messages().screen(
                             "messages.kick-screen",
                             reason,
                             sourceName,
-                            targetName,
+                            currentTargetName,
                             ""
                     );
 
-                    plugin.broadcastPunishment("messages.broadcast.kick", targetName, reason, sourceName, "");
-                    target.kick(plugin.messages().component(finalMessage));
+                    plugin.broadcastPunishment("messages.broadcast.kick", currentTargetName, reason, sourceName, "");
+                    currentTarget.kick(plugin.messages().component(finalMessage));
                     String confirmation = plugin.messages().get("messages.confirmations.kick")
-                            .replace("%player%", targetName)
+                            .replace("%player%", currentTargetName)
                             .replace("%reason%", reason);
                     sender.sendMessage(plugin.messages().component(confirmation));
                 }));

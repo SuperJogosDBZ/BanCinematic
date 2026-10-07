@@ -318,6 +318,7 @@ class RuntimeFlowTest {
 
         try (var bukkit = mockStatic(Bukkit.class)) {
             bukkit.when(() -> Bukkit.getPlayerExact("Alvo")).thenReturn(target);
+            bukkit.when(() -> Bukkit.getPlayer(uuid)).thenReturn(target);
             new KickCommand(plugin, history).onCommand(
                     sender, command, "kick", new String[]{"Alvo", "regra"});
         }
@@ -347,12 +348,61 @@ class RuntimeFlowTest {
 
         try (var bukkit = mockStatic(Bukkit.class)) {
             bukkit.when(() -> Bukkit.getPlayerExact("Alvo")).thenReturn(target);
+            bukkit.when(() -> Bukkit.getPlayer(targetId)).thenReturn(target);
             new KickCommand(plugin, history).onCommand(
                     admin, command, "kick", new String[]{"Alvo", "regra"});
         }
 
         var entry = history.getHistoryPage(targetId, 0, 8).entries().get(0);
         assertEquals("Admin123", entry.source());
+    }
+
+    @Test
+    void kickUsesTheReconnectedPlayerAfterHistoryIsSaved() {
+        UUID uuid = UUID.randomUUID();
+        Player oldTarget = mock(Player.class);
+        when(oldTarget.getUniqueId()).thenReturn(uuid);
+        when(oldTarget.getName()).thenReturn("Alvo");
+        when(oldTarget.isOnline()).thenReturn(false);
+        Player currentTarget = mock(Player.class);
+        when(currentTarget.getUniqueId()).thenReturn(uuid);
+        when(currentTarget.getName()).thenReturn("Alvo");
+        CommandSender sender = mock(CommandSender.class);
+        when(sender.getName()).thenReturn("staff");
+        PunishmentLogger history = new PunishmentLogger(plugin, database);
+
+        try (var bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(() -> Bukkit.getPlayerExact("Alvo")).thenReturn(oldTarget);
+            bukkit.when(() -> Bukkit.getPlayer(uuid)).thenReturn(currentTarget);
+            new KickCommand(plugin, history).onCommand(
+                    sender, mock(Command.class), "kick", new String[]{"Alvo", "regra"});
+        }
+
+        verify(currentTarget).kick(any(net.kyori.adventure.text.Component.class));
+        verify(oldTarget, never()).kick(any(net.kyori.adventure.text.Component.class));
+    }
+
+    @Test
+    void kickKeepsHistoryWithoutAnnouncingSuccessWhenThePlayerLeaves() {
+        UUID uuid = UUID.randomUUID();
+        Player target = mock(Player.class);
+        when(target.getUniqueId()).thenReturn(uuid);
+        when(target.getName()).thenReturn("Alvo");
+        CommandSender sender = mock(CommandSender.class);
+        when(sender.getName()).thenReturn("staff");
+        PunishmentLogger history = new PunishmentLogger(plugin, database);
+
+        try (var bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(() -> Bukkit.getPlayerExact("Alvo")).thenReturn(target);
+            bukkit.when(() -> Bukkit.getPlayer(uuid)).thenReturn(null);
+            new KickCommand(plugin, history).onCommand(
+                    sender, mock(Command.class), "kick", new String[]{"Alvo", "regra"});
+        }
+
+        assertEquals(1, history.getHistoryPage(uuid, 0, 8).totalEntries());
+        verify(target, never()).kick(any(net.kyori.adventure.text.Component.class));
+        verify(plugin, never()).broadcastPunishment(
+                anyString(), anyString(), anyString(), anyString(), anyString());
     }
 
     @Test

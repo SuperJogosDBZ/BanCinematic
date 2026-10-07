@@ -42,24 +42,19 @@ public final class BanManager {
         return run(() -> {
             BanData previous = storage.get(uuid);
             if (previous == null) return PunishmentResult.NOT_ACTIVE;
-            if (!storage.remove(uuid)) return PunishmentResult.STORAGE_ERROR;
-            if (!logger.log(PunishmentType.UNBAN, uuid, name, "Removido", source, null)) {
-                storage.put(previous);
-                return PunishmentResult.STORAGE_ERROR;
-            }
-            return PunishmentResult.SUCCESS;
+            return storage.removeAndLog(uuid, name, "Removido", source,
+                    PunishmentType.UNBAN, logger)
+                    ? PunishmentResult.SUCCESS
+                    : PunishmentResult.STORAGE_ERROR;
         });
     }
 
     private PunishmentResult save(BanData data, PunishmentType type, String duration) {
         UUID uuid = data.uniqueId();
         if (storage.get(uuid) != null) return PunishmentResult.ALREADY_ACTIVE;
-        if (!storage.put(data)) return PunishmentResult.STORAGE_ERROR;
-        if (!logger.log(type, uuid, data.name(), data.reason(), data.source(), duration)) {
-            storage.remove(uuid);
-            return PunishmentResult.STORAGE_ERROR;
-        }
-        return PunishmentResult.SUCCESS;
+        return storage.putAndLog(data, type, duration, logger)
+                ? PunishmentResult.SUCCESS
+                : PunishmentResult.STORAGE_ERROR;
     }
 
     private CompletableFuture<PunishmentResult> run(java.util.function.Supplier<PunishmentResult> task) {

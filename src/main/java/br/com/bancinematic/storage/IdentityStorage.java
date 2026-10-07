@@ -58,7 +58,6 @@ public final class IdentityStorage {
         try (Connection connection = database.connect()) {
             connection.setAutoCommit(false);
             try {
-                updateOrInsertIdentity(connection, uuid, name, now);
                 updateOrInsertName(connection, uuid, name, normalized, now);
                 connection.commit();
             } catch (SQLException exception) {
@@ -76,27 +75,6 @@ public final class IdentityStorage {
         }
         names.put(normalized, uuid);
         return true;
-    }
-
-    private static void updateOrInsertIdentity(Connection connection, UUID uuid,
-                                               String name, long now) throws SQLException {
-        int updated;
-        try (PreparedStatement statement = connection.prepareStatement(
-                "UPDATE player_identities SET current_name = ?, last_seen = ? WHERE player_uuid = ?")) {
-            statement.setString(1, name);
-            statement.setLong(2, now);
-            statement.setString(3, uuid.toString());
-            updated = statement.executeUpdate();
-        }
-        if (updated == 0) {
-            try (PreparedStatement statement = connection.prepareStatement(
-                    "INSERT INTO player_identities (player_uuid, current_name, last_seen) VALUES (?, ?, ?)")) {
-                statement.setString(1, uuid.toString());
-                statement.setString(2, name);
-                statement.setLong(3, now);
-                statement.executeUpdate();
-            }
-        }
     }
 
     private static void updateOrInsertName(Connection connection, UUID uuid, String name,

@@ -70,9 +70,6 @@ public final class DatabaseManager {
                     + "punishment_type VARCHAR(24) NOT NULL, player VARCHAR(64) NOT NULL,"
                     + "reason TEXT NOT NULL, source VARCHAR(128) NOT NULL,"
                     + "punished_at VARCHAR(40) NOT NULL, duration VARCHAR(64))");
-            statement.execute("CREATE TABLE IF NOT EXISTS player_identities ("
-                    + "player_uuid VARCHAR(36) NOT NULL PRIMARY KEY, current_name VARCHAR(64) NOT NULL,"
-                    + "last_seen BIGINT NOT NULL)");
             statement.execute("CREATE TABLE IF NOT EXISTS player_names ("
                     + "normalized_name VARCHAR(64) NOT NULL PRIMARY KEY, player_uuid VARCHAR(36) NOT NULL,"
                     + "name VARCHAR(64) NOT NULL, last_seen BIGINT NOT NULL)");
