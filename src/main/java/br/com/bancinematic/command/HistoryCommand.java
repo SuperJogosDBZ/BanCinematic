@@ -99,18 +99,23 @@ public final class HistoryCommand implements CommandExecutor {
 
         for (int i = 0; i < entries.size(); i++) {
             PunishmentLogger.HistoryEntry entry = entries.get(i);
-            String date = formatDate(entry.date());
-            String duration = entry.duration() == null || entry.duration().isBlank()
-                    ? plugin.messages().get("messages.history.permanent")
-                    : entry.duration();
+            boolean removal = isRemoval(entry.type());
+            boolean durationVisible = !removal && !isKick(entry.type());
 
             sender.sendMessage(message("entry-header",
                     "number", Long.toString(offset + i + 1),
                     "type", formatType(entry.type()),
-                    "date", date));
-            sender.sendMessage(message("reason", "reason", entry.reason()));
-            sender.sendMessage(message("staff", "staff", entry.source()));
-            sender.sendMessage(message("duration", "duration", duration));
+                    "date", formatDate(entry.date())));
+            if (!removal) {
+                String duration = entry.duration() == null || entry.duration().isBlank()
+                        ? plugin.messages().get("messages.history.permanent")
+                        : entry.duration();
+                sender.sendMessage(message("reason", "reason", entry.reason()));
+                sender.sendMessage(message(durationVisible ? "staff" : "staff-last", "staff", entry.source()));
+                if (durationVisible) sender.sendMessage(message("duration", "duration", duration));
+            } else {
+                sender.sendMessage(message("staff-last", "staff", entry.source()));
+            }
             if (i < entries.size() - 1) sender.sendMessage("");
         }
 
@@ -137,6 +142,14 @@ public final class HistoryCommand implements CommandExecutor {
 
         String translated = plugin.getLanguageConfig().getString("messages.history.types." + key);
         return translated == null || translated.isBlank() ? type : translated;
+    }
+
+    private static boolean isRemoval(String type) {
+        return "UNBAN".equalsIgnoreCase(type) || "UNMUTE".equalsIgnoreCase(type);
+    }
+
+    private static boolean isKick(String type) {
+        return "KICK".equalsIgnoreCase(type);
     }
 
     private String message(String key, String... replacements) {

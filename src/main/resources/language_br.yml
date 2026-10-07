@@ -104,6 +104,7 @@ messages:
     entry-header: "&c#%number% &f%type% &8• &7%date%"
     reason: " &8├ &7Motivo: &f%reason%"
     staff: " &8├ &7Aplicado por: &f%staff%"
+    staff-last: " &8└ &7Aplicado por: &f%staff%"
     duration: " &8└ &7Duração: &f%duration%"
     permanent: "Permanente"
     navigation: "&7Use &f/history %player% <página>&7 para navegar."

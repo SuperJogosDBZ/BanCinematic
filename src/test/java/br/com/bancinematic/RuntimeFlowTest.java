@@ -434,6 +434,33 @@ class RuntimeFlowTest {
     }
 
     @Test
+    void historyHidesInapplicableFieldsForUnbanUnmuteAndKick() {
+        UUID targetId = UUID.randomUUID();
+        identities.record(targetId, "Alvo");
+        PunishmentLogger history = new PunishmentLogger(plugin, database);
+        history.log(br.com.bancinematic.punishment.PunishmentType.UNBAN,
+                targetId, "Alvo", "Removido", "Admin123", null);
+        history.log(br.com.bancinematic.punishment.PunishmentType.UNMUTE,
+                targetId, "Alvo", "Removido", "CONSOLE", null);
+        history.log(br.com.bancinematic.punishment.PunishmentType.KICK,
+                targetId, "Alvo", "Insultos", "Admin456", null);
+
+        CommandSender viewer = mock(CommandSender.class);
+        Command command = mock(Command.class);
+        new HistoryCommand(plugin, history).onCommand(viewer, command, "history", new String[]{"Alvo"});
+
+        verify(viewer).sendMessage(contains("DESMUTE"));
+        verify(viewer).sendMessage(contains("DESBANIMENTO"));
+        verify(viewer).sendMessage(contains("KICK"));
+        verify(viewer).sendMessage(contains("Motivo: §fInsultos"));
+        verify(viewer).sendMessage(contains("└ §7Aplicado por: §fCONSOLE"));
+        verify(viewer).sendMessage(contains("└ §7Aplicado por: §fAdmin123"));
+        verify(viewer).sendMessage(contains("└ §7Aplicado por: §fAdmin456"));
+        verify(viewer, never()).sendMessage(contains("Motivo: §fRemovido"));
+        verify(viewer, never()).sendMessage(contains("Duração: §fPermanente"));
+    }
+
+    @Test
     void cinematicBanKeepsTheExecutorCapturedWhenTheBanIsPersisted() {
         UUID adminId = UUID.randomUUID();
         Player target = mock(Player.class);

@@ -1,5 +1,5 @@
 name: BanCinematic
-version: 2.0.5
+version: 2.0.6
 main: br.com.bancinematic.BanCinematicPlugin
 api-version: '1.21'
 author: SuperJogosDBZ
