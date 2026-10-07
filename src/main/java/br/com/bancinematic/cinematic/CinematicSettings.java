@@ -2,7 +2,6 @@ package br.com.bancinematic.cinematic;
 
 import org.bukkit.configuration.file.FileConfiguration;
 
-/** Immutable snapshot of cinematic options, captured when a punishment scene starts. */
 public record CinematicSettings(
         boolean enabled,
         boolean darkness,
@@ -24,7 +23,6 @@ public record CinematicSettings(
         double monsterApproachSpeed,
         double monsterAttackDistance
 ) {
-    /** Valor usado quando cinematic.max-seconds não existe no config.yml. Não é um limite. */
     private static final int DEFAULT_MAX_SECONDS = 15;
 
     public static CinematicSettings from(FileConfiguration config) {

@@ -4,7 +4,7 @@ import br.com.bancinematic.BanCinematicPlugin;
 import br.com.bancinematic.cinematic.BanCinematic;
 import br.com.bancinematic.punishment.BanManager;
 import br.com.bancinematic.punishment.PunishmentResult;
-import br.com.bancinematic.punishment.ExecutorIdentity;
+import br.com.bancinematic.util.ExecutorName;
 import br.com.bancinematic.util.TimeUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.command.*;
@@ -71,9 +71,8 @@ public final class TempBanCommand implements CommandExecutor, TabCompleter {
             return true;
         }
 
-        ExecutorIdentity executor = ExecutorIdentity.from(sender);
-        String sourceName = executor.name();
-        manager.tempBan(uuid, name, reason, executor, seconds).thenAccept(result -> plugin.runSync(() -> {
+        String sourceName = ExecutorName.from(sender);
+        manager.tempBan(uuid, name, reason, sourceName, seconds).thenAccept(result -> plugin.runSync(() -> {
             if (result == PunishmentResult.ALREADY_ACTIVE) {
                 sender.sendMessage(plugin.messages().get("messages.already-banned"));
             } else if (result != PunishmentResult.SUCCESS) {

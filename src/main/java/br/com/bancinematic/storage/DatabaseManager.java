@@ -12,7 +12,6 @@ import java.sql.Statement;
 import java.util.Locale;
 import java.util.Properties;
 
-/** Owns database connection settings and creates the plugin schema. */
 public final class DatabaseManager {
     private final BanCinematicPlugin plugin;
     private final boolean sqlite;
@@ -70,7 +69,6 @@ public final class DatabaseManager {
                     + "id VARCHAR(64) NOT NULL PRIMARY KEY, subject_uuid VARCHAR(36) NOT NULL,"
                     + "punishment_type VARCHAR(24) NOT NULL, player VARCHAR(64) NOT NULL,"
                     + "reason TEXT NOT NULL, source VARCHAR(128) NOT NULL,"
-                    + "executor_uuid VARCHAR(36), executor_name VARCHAR(64) NOT NULL,"
                     + "punished_at VARCHAR(40) NOT NULL, duration VARCHAR(64))");
             statement.execute("CREATE TABLE IF NOT EXISTS player_identities ("
                     + "player_uuid VARCHAR(36) NOT NULL PRIMARY KEY, current_name VARCHAR(64) NOT NULL,"
@@ -119,7 +117,6 @@ public final class DatabaseManager {
         }
     }
 
-    /** Returns a non-negative JDBC timeout in milliseconds, restoring the safe default if needed. */
     private int timeout(String path, int defaultValue) {
         int value = plugin.getConfig().getInt(path, defaultValue);
         if (value >= 0) return value;

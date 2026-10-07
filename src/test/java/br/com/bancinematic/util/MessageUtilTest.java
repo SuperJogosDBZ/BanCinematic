@@ -9,10 +9,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
-/**
- * Simula um servidor que atualizou o plugin: o language_*.yml dele não tem as chaves novas,
- * que existem apenas nos padrões embutidos no JAR.
- */
 class MessageUtilTest {
     private MessageUtil messages;
 

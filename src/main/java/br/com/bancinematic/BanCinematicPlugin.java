@@ -28,7 +28,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
 public final class BanCinematicPlugin extends JavaPlugin {
-    /** Shared message formatter; it reads the current language configuration on every lookup. */
     private final MessageUtil messages = new MessageUtil(this);
     private BanStorage banStorage;
     private MuteStorage muteStorage;
@@ -85,7 +84,6 @@ public final class BanCinematicPlugin extends JavaPlugin {
         register("kick", new KickCommand(this, punishmentLogger));
         register("history", new HistoryCommand(this, punishmentLogger));
 
-        // The timer only enqueues work; the deletes themselves run on the database thread.
         getServer().getScheduler().runTaskTimer(this, () -> {
             databaseExecutor.execute(muteStorage::cleanupExpired);
             databaseExecutor.execute(banStorage::cleanupExpired);
@@ -102,16 +100,10 @@ public final class BanCinematicPlugin extends JavaPlugin {
         return identityStorage;
     }
 
-    /** Single thread that owns every database operation. */
     public DatabaseExecutor databaseExecutor() {
         return databaseExecutor;
     }
 
-    /**
-     * Runs the task on the server thread. Safe to call from the database thread; does
-     * nothing if the plugin has been disabled in the meantime, because there is no longer
-     * a server thread to hand the work to.
-     */
     public void runSync(Runnable task) {
         if (Bukkit.isPrimaryThread()) {
             task.run();
@@ -121,7 +113,6 @@ public final class BanCinematicPlugin extends JavaPlugin {
         try {
             getServer().getScheduler().runTask(this, task);
         } catch (org.bukkit.plugin.IllegalPluginAccessException ignored) {
-            // The plugin was disabled between the check and the call.
         }
     }
 
@@ -143,13 +134,11 @@ public final class BanCinematicPlugin extends JavaPlugin {
         }
     }
 
-    /** Envia mensagens de status à equipe no jogo, sem ecoá-las no console. */
     public void sendStaffMessage(CommandSender recipient, String message) {
         if (recipient instanceof ConsoleCommandSender) return;
         recipient.sendMessage(message);
     }
 
-    /** Envia componentes de status à equipe no jogo, sem ecoá-los no console. */
     public void sendStaffMessage(CommandSender recipient, Component message) {
         if (recipient instanceof ConsoleCommandSender) return;
         recipient.sendMessage(message);
@@ -203,7 +192,6 @@ public final class BanCinematicPlugin extends JavaPlugin {
     @Override
     public void onDisable() {
         if (cinematic != null) cinematic.shutdown();
-        // Lets pending punishments reach the database before the server stops.
         if (databaseExecutor != null) databaseExecutor.close();
     }
 }

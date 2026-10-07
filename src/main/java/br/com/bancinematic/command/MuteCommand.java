@@ -3,7 +3,7 @@ package br.com.bancinematic.command;
 import br.com.bancinematic.BanCinematicPlugin;
 import br.com.bancinematic.punishment.MuteManager;
 import br.com.bancinematic.punishment.PunishmentResult;
-import br.com.bancinematic.punishment.ExecutorIdentity;
+import br.com.bancinematic.util.ExecutorName;
 import br.com.bancinematic.util.TimeUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
@@ -44,9 +44,8 @@ public final class MuteCommand implements CommandExecutor {
 
         java.util.UUID uuid = CommandUtil.resolveKnownPlayer(plugin, sender, name);
         if (uuid == null) return true;
-        ExecutorIdentity executor = ExecutorIdentity.from(sender);
-        String sourceName = executor.name();
-        manager.mute(uuid, name, reason, executor).thenAccept(result -> plugin.runSync(() -> {
+        String sourceName = ExecutorName.from(sender);
+        manager.mute(uuid, name, reason, sourceName).thenAccept(result -> plugin.runSync(() -> {
             if (result == PunishmentResult.ALREADY_ACTIVE) {
                 sender.sendMessage(plugin.messages().get("messages.already-muted"));
                 return;

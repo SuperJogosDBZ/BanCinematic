@@ -5,7 +5,6 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
 
-/** Persists the UUID/nickname association after a player joins successfully. */
 public final class PlayerIdentityListener implements Listener {
     private final BanCinematicPlugin plugin;
 

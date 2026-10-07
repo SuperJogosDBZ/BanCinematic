@@ -17,7 +17,6 @@ public final class ChatListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onChat(AsyncPlayerChatEvent event) {
-        // Read-only UUID lookup. MuteStorage is safe for this asynchronous read.
         MuteData data = muteManager.get(
                 event.getPlayer().getUniqueId()
         );

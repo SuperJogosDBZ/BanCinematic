@@ -12,11 +12,6 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Active bans backed by SQL and mirrored in memory for fast login checks.
- * Reads only touch memory and never block; writes do database I/O and must run on
- * the database thread (see {@link DatabaseExecutor}).
- */
 public final class BanStorage {
     private final BanCinematicPlugin plugin;
     private final DatabaseManager database;
@@ -55,7 +50,6 @@ public final class BanStorage {
         }
     }
 
-    /** Memory-only and lock-free, so it is safe on the server thread. */
     public BanData get(UUID uuid) {
         if (uuid == null) return null;
         BanData data = bans.get(uuid);
@@ -114,7 +108,6 @@ public final class BanStorage {
         return true;
     }
 
-    /** Deletes expired bans from the database and from memory. */
     public synchronized void cleanupExpired() {
         long now = Instant.now().toEpochMilli();
         try (Connection connection = database.connect();

@@ -13,7 +13,6 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 
-/** Stores the UUID/name associations learned from players who join the server. */
 public final class IdentityStorage {
     private final BanCinematicPlugin plugin;
     private final DatabaseManager database;
@@ -45,10 +44,6 @@ public final class IdentityStorage {
         return names.get(normalize(name));
     }
 
-    /**
-     * Makes the nickname resolvable right away (memory) and persists it on the database
-     * thread, so a join never waits for disk or network I/O.
-     */
     public CompletableFuture<Boolean> recordAsync(DatabaseExecutor executor, UUID uuid, String name) {
         names.put(normalize(name), uuid);
         return executor.submit(() -> record(uuid, name)).exceptionally(error -> {
@@ -57,7 +52,6 @@ public final class IdentityStorage {
         });
     }
 
-    /** Saves the current nickname and keeps earlier nicknames as UUID aliases. */
     public synchronized boolean record(UUID uuid, String name) {
         String normalized = normalize(name);
         long now = Instant.now().toEpochMilli();

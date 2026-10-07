@@ -9,7 +9,6 @@ import java.util.UUID;
 import java.util.stream.IntStream;
 import java.util.stream.Collectors;
 
-/** Small helpers shared by punishment commands. */
 final class CommandUtil {
     private CommandUtil() {
     }

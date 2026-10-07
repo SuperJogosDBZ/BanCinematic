@@ -2,9 +2,8 @@ package br.com.bancinematic.command;
 
 import br.com.bancinematic.BanCinematicPlugin;
 import br.com.bancinematic.punishment.PunishmentType;
-import br.com.bancinematic.punishment.ExecutorIdentity;
 import br.com.bancinematic.storage.PunishmentLogger;
-import br.com.bancinematic.util.MessageUtil;
+import br.com.bancinematic.util.ExecutorName;
 import br.com.bancinematic.util.InputLimits;
 import org.bukkit.Bukkit;
 import org.bukkit.command.*;
@@ -57,11 +56,10 @@ public final class KickCommand implements CommandExecutor {
 
         UUID uuid = target.getUniqueId();
         String targetName = target.getName();
-        ExecutorIdentity executor = ExecutorIdentity.from(sender);
-        String sourceName = executor.name();
+        String sourceName = ExecutorName.from(sender);
 
         plugin.databaseExecutor()
-                .submit(() -> logger.log(PunishmentType.KICK, uuid, targetName, reason, sourceName, executor, null))
+                .submit(() -> logger.log(PunishmentType.KICK, uuid, targetName, reason, sourceName, null))
                 .exceptionally(error -> {
                     plugin.getLogger().severe("Falha inesperada ao gravar o kick: " + error);
                     return false;
@@ -76,7 +74,7 @@ public final class KickCommand implements CommandExecutor {
                         return;
                     }
 
-                    String finalMessage = new MessageUtil(plugin).screen(
+                    String finalMessage = plugin.messages().screen(
                             "messages.kick-screen",
                             reason,
                             sourceName,
@@ -85,7 +83,7 @@ public final class KickCommand implements CommandExecutor {
                     );
 
                     plugin.broadcastPunishment("messages.broadcast.kick", targetName, reason, sourceName, "");
-                    target.kick(new MessageUtil(plugin).component(finalMessage));
+                    target.kick(plugin.messages().component(finalMessage));
                     String confirmation = plugin.messages().get("messages.confirmations.kick")
                             .replace("%player%", targetName)
                             .replace("%reason%", reason);

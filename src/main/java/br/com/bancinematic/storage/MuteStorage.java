@@ -12,11 +12,6 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Active mutes backed by SQL and mirrored in memory for fast chat checks.
- * Reads only touch memory and never block; writes do database I/O and must run on
- * the database thread (see {@link DatabaseExecutor}).
- */
 public final class MuteStorage {
     private final BanCinematicPlugin plugin;
     private final DatabaseManager database;

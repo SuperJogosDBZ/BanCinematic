@@ -19,7 +19,6 @@ import br.com.bancinematic.punishment.BanManager;
 import br.com.bancinematic.punishment.BanData;
 import br.com.bancinematic.punishment.MuteManager;
 import br.com.bancinematic.punishment.PunishmentResult;
-import br.com.bancinematic.punishment.ExecutorIdentity;
 import br.com.bancinematic.storage.BanStorage;
 import br.com.bancinematic.storage.DatabaseExecutor;
 import br.com.bancinematic.storage.DatabaseManager;
@@ -29,6 +28,7 @@ import br.com.bancinematic.storage.PunishmentLogger;
 import br.com.bancinematic.util.MessageUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
+import org.bukkit.Server;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.ConsoleCommandSender;
@@ -39,6 +39,8 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerLoginEvent;
 import org.bukkit.scheduler.BukkitScheduler;
 import org.bukkit.scheduler.BukkitTask;
+import org.bukkit.plugin.PluginDescriptionFile;
+import org.bukkit.plugin.PluginManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -110,7 +112,6 @@ class RuntimeFlowTest {
         database.initialize();
         identities = new IdentityStorage(plugin, database);
         when(plugin.identities()).thenReturn(identities);
-        // Nos testes o "banco" roda na própria thread e o "servidor" executa na hora.
         when(plugin.databaseExecutor()).thenReturn(DatabaseExecutor.inline());
         doAnswer(invocation -> {
             invocation.<Runnable>getArgument(0).run();
@@ -162,6 +163,74 @@ class RuntimeFlowTest {
         assertTrue(new UnbanCommand(plugin, manager, cinematic).onCommand(
                 sender, command, "unban", new String[]{"Taupaipai"}));
         assertFalse(manager.isBanned(uuid), "Após /unban, o jogador não deve mais ser bloqueado.");
+    }
+
+    @Test
+    void cinematicUsesTheReconnectedPlayerAfterTheAsynchronousBanWrite() {
+        UUID uuid = UUID.randomUUID();
+        Player oldTarget = mock(Player.class);
+        when(oldTarget.getUniqueId()).thenReturn(uuid);
+        when(oldTarget.getName()).thenReturn("Alvo");
+        when(oldTarget.isOnline()).thenReturn(false);
+        Player currentTarget = mock(Player.class);
+        when(currentTarget.getUniqueId()).thenReturn(uuid);
+        when(currentTarget.getName()).thenReturn("Alvo");
+        when(currentTarget.isOnline()).thenReturn(true);
+        CommandSender source = mock(CommandSender.class);
+        when(source.getName()).thenReturn("console");
+        config.set("cinematic.enabled", false);
+        configureCinematicConstruction();
+        BanManager manager = new BanManager(plugin, new BanStorage(plugin, database),
+                new PunishmentLogger(plugin, database), DatabaseExecutor.inline());
+        BukkitScheduler scheduler = mock(BukkitScheduler.class);
+        BukkitTask task = mock(BukkitTask.class);
+
+        try (var bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(() -> Bukkit.getPlayer(uuid)).thenReturn(currentTarget);
+            bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+            when(scheduler.runTaskLater(eq(plugin), any(Runnable.class), eq(1L))).thenAnswer(invocation -> {
+                invocation.<Runnable>getArgument(1).run();
+                return task;
+            });
+
+            new BanCinematic(plugin, manager).start(source, oldTarget, "Hacking", null);
+        }
+
+        verify(currentTarget).kick(any(net.kyori.adventure.text.Component.class));
+        verify(oldTarget, never()).kick(any(net.kyori.adventure.text.Component.class));
+    }
+
+    @Test
+    void cinematicAnnouncesWithoutKickingWhenThePlayerIsNoLongerOnline() {
+        UUID uuid = UUID.randomUUID();
+        Player oldTarget = mock(Player.class);
+        when(oldTarget.getUniqueId()).thenReturn(uuid);
+        when(oldTarget.getName()).thenReturn("Alvo");
+        CommandSender source = mock(CommandSender.class);
+        when(source.getName()).thenReturn("console");
+        configureCinematicConstruction();
+        BanManager manager = new BanManager(plugin, new BanStorage(plugin, database),
+                new PunishmentLogger(plugin, database), DatabaseExecutor.inline());
+
+        try (var bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(() -> Bukkit.getPlayer(uuid)).thenReturn(null);
+            new BanCinematic(plugin, manager).start(source, oldTarget, "Hacking", null);
+        }
+
+        verify(plugin).broadcastPunishment("messages.broadcast.ban", "Alvo", "Hacking", "CONSOLE", "");
+        verify(oldTarget, never()).kick(any(net.kyori.adventure.text.Component.class));
+    }
+
+    private void configureCinematicConstruction() {
+        Server server = mock(Server.class);
+        PluginManager pluginManager = mock(PluginManager.class);
+        PluginDescriptionFile description = mock(PluginDescriptionFile.class);
+        when(plugin.getServer()).thenReturn(server);
+        when(plugin.namespace()).thenReturn("bancinematic");
+        when(plugin.getName()).thenReturn("BanCinematic");
+        when(server.getPluginManager()).thenReturn(pluginManager);
+        when(plugin.getDescription()).thenReturn(description);
+        when(description.getName()).thenReturn("BanCinematic");
     }
 
     @Test
@@ -255,12 +324,35 @@ class RuntimeFlowTest {
 
         verify(target).kick(any(net.kyori.adventure.text.Component.class));
         assertEquals(1, history.getHistoryPage(uuid, 0, 8).entries().size());
-        assertNull(history.getHistoryPage(uuid, 0, 8).entries().get(0).executorUniqueId());
-        assertEquals("CONSOLE", history.getHistoryPage(uuid, 0, 8).entries().get(0).executorName());
+        assertEquals("CONSOLE", history.getHistoryPage(uuid, 0, 8).entries().get(0).source());
         long responses = mockingDetails(sender).getInvocations().stream()
                 .filter(invocation -> invocation.getMethod().getName().equals("sendMessage"))
                 .count();
         assertEquals(1, responses, "O comando não deve enviar duas confirmações ao staff.");
+    }
+
+    @Test
+    void kickRecordsThePlayerSource() {
+        UUID targetId = UUID.randomUUID();
+        UUID adminId = UUID.randomUUID();
+        Player target = mock(Player.class);
+        when(target.getUniqueId()).thenReturn(targetId);
+        when(target.getName()).thenReturn("Alvo");
+        when(target.isOnline()).thenReturn(true);
+        Player admin = mock(Player.class);
+        when(admin.getUniqueId()).thenReturn(adminId);
+        when(admin.getName()).thenReturn("Admin123");
+        Command command = mock(Command.class);
+        PunishmentLogger history = new PunishmentLogger(plugin, database);
+
+        try (var bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(() -> Bukkit.getPlayerExact("Alvo")).thenReturn(target);
+            new KickCommand(plugin, history).onCommand(
+                    admin, command, "kick", new String[]{"Alvo", "regra"});
+        }
+
+        var entry = history.getHistoryPage(targetId, 0, 8).entries().get(0);
+        assertEquals("Admin123", entry.source());
     }
 
     @Test
@@ -283,8 +375,7 @@ class RuntimeFlowTest {
 
         PunishmentLogger.HistoryEntry entry = new PunishmentLogger(plugin, database)
                 .getHistoryPage(targetId, 0, 8).entries().get(0);
-        assertEquals(adminId, entry.executorUniqueId());
-        assertEquals("Admin123", entry.executorName());
+        assertEquals("Admin123", entry.source());
 
         CommandSender viewer = mock(CommandSender.class);
         new HistoryCommand(plugin, new PunishmentLogger(plugin, database)).onCommand(
@@ -301,12 +392,10 @@ class RuntimeFlowTest {
         Player admin = mock(Player.class);
         when(admin.getUniqueId()).thenReturn(adminId);
         when(admin.getName()).thenReturn("Admin123");
-        ExecutorIdentity executor = ExecutorIdentity.from(admin);
         CinematicSession session = new CinematicSession(target, new Location(null, 0, 64, 0),
-                admin, executor, "Hacking", null, CinematicSettings.from(config));
+                admin, "Admin123", "Hacking", null, CinematicSettings.from(config));
 
-        assertEquals(adminId, session.executor().uniqueId());
-        assertEquals("Admin123", session.executor().name());
+        assertEquals("Admin123", session.sourceName());
     }
 
     @Test
@@ -366,7 +455,7 @@ class RuntimeFlowTest {
         config.set("messages.broadcast.ban", "BAN:%player%");
         config.set("messages.confirmations.ban", "CONFIRMED:%player%:%reason%");
 
-        assertEquals(PunishmentResult.SUCCESS, manager.ban(uuid, "Alvo", "spam", new ExecutorIdentity(UUID.randomUUID(), "staff")).join());
+        assertEquals(PunishmentResult.SUCCESS, manager.ban(uuid, "Alvo", "spam", "staff").join());
         verify(plugin, never()).broadcastPunishment(
                 anyString(), anyString(), anyString(), anyString(), anyString());
 

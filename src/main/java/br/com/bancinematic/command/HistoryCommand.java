@@ -71,7 +71,6 @@ public final class HistoryCommand implements CommandExecutor {
         return true;
     }
 
-    /** Server thread: formats and sends one page of the history. */
     private void showPage(CommandSender sender, String player, int page, long offset,
                           PunishmentLogger.HistoryPage history) {
         if (history.totalEntries() == 0) {
@@ -110,7 +109,7 @@ public final class HistoryCommand implements CommandExecutor {
                     "type", formatType(entry.type()),
                     "date", date));
             sender.sendMessage(message("reason", "reason", entry.reason()));
-            sender.sendMessage(message("staff", "staff", entry.executorName()));
+            sender.sendMessage(message("staff", "staff", entry.source()));
             sender.sendMessage(message("duration", "duration", duration));
             if (i < entries.size() - 1) sender.sendMessage("");
         }

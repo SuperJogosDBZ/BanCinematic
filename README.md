@@ -1,4 +1,4 @@
-# BanCinematic 2.0.2
+# BanCinematic 2.0.3
 
 **Author:** SuperJogosDBZ  
 **Paper:** 1.21.11

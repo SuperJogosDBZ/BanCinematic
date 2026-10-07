@@ -8,18 +8,9 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
-/**
- * Runs every database operation on one dedicated thread, so the server thread never
- * waits for disk or network I/O. Because there is a single worker, operations are also
- * executed in submission order, which keeps "check, write, log" sequences atomic with
- * respect to each other without extra locking.
- *
- * <p>Never call anything that waits for the server thread from inside a task.
- */
 public final class DatabaseExecutor implements AutoCloseable {
     private static final long SHUTDOWN_WAIT_SECONDS = 15;
 
-    /** Null in inline mode. */
     private final ExecutorService service;
 
     private DatabaseExecutor(ExecutorService service) {
@@ -35,7 +26,6 @@ public final class DatabaseExecutor implements AutoCloseable {
         return new DatabaseExecutor(Executors.newSingleThreadExecutor(factory));
     }
 
-    /** Runs each task immediately on the calling thread. Intended for tests only. */
     public static DatabaseExecutor inline() {
         return new DatabaseExecutor(null);
     }
@@ -62,7 +52,6 @@ public final class DatabaseExecutor implements AutoCloseable {
         });
     }
 
-    /** Finishes the queued operations (up to a time limit) and stops the worker. */
     @Override
     public void close() {
         if (service == null) return;

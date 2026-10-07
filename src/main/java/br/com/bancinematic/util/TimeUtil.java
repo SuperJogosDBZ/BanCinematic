@@ -30,7 +30,6 @@ public final class TimeUtil {
             };
             if (seconds == null) return null;
 
-            // Expirations are stored as epoch milliseconds in the database.
             Instant expiration = Instant.now().plusSeconds(seconds);
             if (expiration.toEpochMilli() <= Instant.now().toEpochMilli()) return null;
             return seconds;
@@ -43,7 +42,6 @@ public final class TimeUtil {
         return format(seconds, null);
     }
 
-    /** Formats all non-zero duration units using the currently selected language. */
     public static String format(long seconds, Function<String, String> translations) {
         if (seconds <= 0) return durationText(translations, "less-than-one-second");
 
@@ -68,12 +66,10 @@ public final class TimeUtil {
         return String.join(durationText(translations, "separator"), parts);
     }
 
-    /** Formats a live punishment expiry without rounding the displayed time down. */
     public static String formatRemaining(Instant expires) {
         return formatRemaining(expires, null);
     }
 
-    /** Formats a live punishment expiry using the currently selected language. */
     public static String formatRemaining(
             Instant expires,
             Function<String, String> translations

@@ -6,7 +6,6 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
 
-/** Reminds returning players about an active mute and its remaining time. */
 public final class MuteJoinListener implements Listener {
     private final MuteManager muteManager;
 

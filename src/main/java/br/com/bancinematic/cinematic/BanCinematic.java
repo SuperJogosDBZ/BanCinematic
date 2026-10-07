@@ -2,9 +2,8 @@ package br.com.bancinematic.cinematic;
 
 import br.com.bancinematic.BanCinematicPlugin;
 import br.com.bancinematic.punishment.BanManager;
-import br.com.bancinematic.punishment.ExecutorIdentity;
 import br.com.bancinematic.punishment.PunishmentResult;
-import br.com.bancinematic.util.MessageUtil;
+import br.com.bancinematic.util.ExecutorName;
 import br.com.bancinematic.util.TimeUtil;
 import org.bukkit.*;
 import org.bukkit.attribute.Attribute;
@@ -43,9 +42,7 @@ public final class BanCinematic implements Listener {
     private final BanCinematicPlugin plugin;
     private final BanManager banManager;
     private final Map<UUID, CinematicSession> sessions = new HashMap<>();
-    /** Players whose ban is still being written to the database (server thread only). */
     private final Set<UUID> pending = new HashSet<>();
-    /** Active cinematic monsters, indexed by UUID for fast checks and cleanup. */
     private final Map<UUID, Entity> activeMonsters = new HashMap<>();
     private final NamespacedKey playerStateKey;
 
@@ -60,11 +57,6 @@ public final class BanCinematic implements Listener {
         return sessions.containsKey(playerId) || pending.contains(playerId);
     }
 
-    /**
-     * Saves the ban on the database thread and, once it is safely stored, runs the scene.
-     * The ban is persisted first, so it survives a disconnect or a crash during the scene.
-     * The server thread is never blocked waiting for the database.
-     */
     public void start(CommandSender source, Player target, String reason, Long duration) {
         UUID uuid = target.getUniqueId();
 
@@ -76,25 +68,20 @@ public final class BanCinematic implements Listener {
         pending.add(uuid);
 
         String name = target.getName();
-        ExecutorIdentity executor = ExecutorIdentity.from(source);
+        String sourceName = ExecutorName.from(source);
         CompletableFuture<PunishmentResult> saving = duration == null
-                ? banManager.ban(uuid, name, reason, executor)
-                : banManager.tempBan(uuid, name, reason, executor, duration);
+                ? banManager.ban(uuid, name, reason, sourceName)
+                : banManager.tempBan(uuid, name, reason, sourceName, duration);
 
         saving.thenAccept(result -> plugin.runSync(() ->
-                afterBanSaved(source, executor, target, reason, duration, result)));
+                afterBanSaved(source, sourceName, target, reason, duration, result)));
     }
 
-    /**
-     * Server thread: continues the flow once the database answered. The player is released
-     * from {@code pending} no matter how this ends, so an unexpected error can never leave
-     * them stuck as "already running" (which would also block /unban).
-     */
-    private void afterBanSaved(CommandSender source, ExecutorIdentity executor, Player target, String reason,
+    private void afterBanSaved(CommandSender source, String sourceName, Player target, String reason,
                                Long duration, PunishmentResult result) {
         UUID uuid = target.getUniqueId();
         try {
-            continueAfterBanSaved(source, executor, target, reason, duration, result);
+            continueAfterBanSaved(source, sourceName, target, reason, duration, result);
         } catch (RuntimeException error) {
             plugin.getLogger().log(java.util.logging.Level.SEVERE,
                     "Falha ao iniciar a cinemática de " + target.getName()
@@ -102,11 +89,10 @@ public final class BanCinematic implements Listener {
             CinematicSession broken = sessions.remove(uuid);
             if (broken != null) cleanup(broken);
 
-            // O ban já está salvo: sem a animação, o jogador ainda precisa ser desconectado.
             Player stillOnline = Bukkit.getPlayer(uuid);
             if (stillOnline != null) {
                 try {
-                    punishAndKick(source, executor, stillOnline, reason, duration);
+                    punishAndKick(source, sourceName, stillOnline, reason, duration);
                 } catch (RuntimeException second) {
                     plugin.getLogger().log(java.util.logging.Level.SEVERE,
                             "Também não foi possível desconectar " + stillOnline.getName() + ".", second);
@@ -117,7 +103,7 @@ public final class BanCinematic implements Listener {
         }
     }
 
-    private void continueAfterBanSaved(CommandSender source, ExecutorIdentity executor, Player target, String reason,
+    private void continueAfterBanSaved(CommandSender source, String sourceName, Player target, String reason,
                                        Long duration, PunishmentResult result) {
         UUID uuid = target.getUniqueId();
 
@@ -130,31 +116,29 @@ public final class BanCinematic implements Listener {
             return;
         }
 
-        // If the player disconnected while the database write was in progress,
-        // the ban is still safely stored; simply do not start the cinematic.
-        if (!target.isOnline()) {
-            banManager.announceBan(target.getName(), reason, executor.name(), duration);
+        Player currentTarget = Bukkit.getPlayer(uuid);
+        if (currentTarget == null) {
+            banManager.announceBan(target.getName(), reason, sourceName, duration);
             banManager.sendBanConfirmation(source, target.getName(), reason, duration);
             return;
         }
-        final Player cinematicTarget = target;
+        final Player cinematicTarget = currentTarget;
 
         plugin.sendStaffMessage(source, plugin.messages().get("messages.ban-started")
                 .replace("%player%", cinematicTarget.getName()));
 
         CinematicSettings settings = CinematicSettings.from(plugin.getConfig());
         if (!settings.enabled()) {
-            punishAndKick(source, executor, cinematicTarget, reason, duration);
+            punishAndKick(source, sourceName, cinematicTarget, reason, duration);
             return;
         }
 
         Location origin = cinematicTarget.getLocation().clone();
         CinematicSession session = new CinematicSession(
-                cinematicTarget, origin, source, executor, reason, duration, settings
+                cinematicTarget, origin, source, sourceName, reason, duration, settings
         );
         sessions.put(uuid, session);
 
-        // Written before the changes below, so a crash cannot leave the player stuck.
         saveState(session, cinematicTarget);
         cinematicTarget.setInvulnerable(true);
         cinematicTarget.setCollidable(false);
@@ -218,7 +202,6 @@ public final class BanCinematic implements Listener {
             }
 
             java.util.function.Consumer<Entity> setup = entity -> {
-                // Never written to disk: a crash during the scene cannot leave it behind.
                 entity.setPersistent(false);
                 if (entity instanceof LivingEntity living) {
                     living.setAI(false);
@@ -232,7 +215,6 @@ public final class BanCinematic implements Listener {
                     }
                 }
 
-                // Usa a mesma pose inicial do Warden vanilla.
                 if (entity.getType() == EntityType.WARDEN) {
                     entity.setPose(Pose.EMERGING, true);
                 }
@@ -278,7 +260,6 @@ public final class BanCinematic implements Listener {
         boolean sounds = settings.sounds();
         boolean alive = monster != null && monster.isValid();
 
-        // long: um max-seconds muito alto no config não pode estourar o int.
         int maxTicks = (int) Math.max(
                 100L,
                 Math.min(Integer.MAX_VALUE, settings.maxSeconds() * 20L)
@@ -430,7 +411,6 @@ public final class BanCinematic implements Listener {
         }
     }
 
-    /** Dá um tranco curto para o lado e para baixo, e recentraliza a câmera. */
     private void applyImpactCameraJolt(CinematicSession session, Player target) {
         float yawOffset;
         float pitchOffset;
@@ -498,10 +478,6 @@ public final class BanCinematic implements Listener {
         session.phase(CinematicSession.Phase.WINDUP);
     }
 
-    /**
-     * O Warden avança, para diante do jogador e prepara o golpe.
-     * Retorna true quando chega ao alcance do ataque.
-     */
     private boolean step(CinematicSession session, Entity monster, Player target) {
         Location from = monster.getLocation();
 
@@ -541,7 +517,6 @@ public final class BanCinematic implements Listener {
         return false;
     }
 
-    /** Inicia o golpe visível antes de o jogador receber o impacto. */
     private void startAttack(CinematicSession session, Player target) {
         if (session.phase() != CinematicSession.Phase.WINDUP) return;
 
@@ -556,7 +531,6 @@ public final class BanCinematic implements Listener {
         session.phase(CinematicSession.Phase.ATTACKING);
     }
 
-    /** Mostra o impacto; o kick acontece após alguns ticks para exibi-lo. */
     private void hit(CinematicSession session, Player target) {
         if (session.phase() != CinematicSession.Phase.ATTACKING) return;
 
@@ -585,8 +559,6 @@ public final class BanCinematic implements Listener {
             );
         }
 
-        // A animação da entidade é transmitida aos observadores; envie também
-        // a animação diretamente ao jogador que está recebendo o impacto.
         target.playHurtAnimation(0f);
         target.sendHurtAnimation(0f);
 
@@ -621,16 +593,14 @@ public final class BanCinematic implements Listener {
         session.phase(CinematicSession.Phase.IMPACT);
     }
 
-    /** Finaliza a cena e aplica o kick depois que o cliente recebeu o impacto. */
     private void finishHit(CinematicSession session, Player target) {
         if (!beginFinish(session)) return;
 
-        // Remove the cinematic status while the player is still online.
         cleanupPlayer(session);
 
         punishAndKick(
                 session.source(),
-                session.executor(),
+                session.sourceName(),
                 target,
                 session.reason(),
                 session.duration()
@@ -730,7 +700,6 @@ public final class BanCinematic implements Listener {
         }
     }
 
-    /** Stores the player's previous state on the player, which is saved with the player data. */
     private void saveState(CinematicSession session, Player player) {
         player.getPersistentDataContainer().set(
                 playerStateKey,
@@ -741,10 +710,6 @@ public final class BanCinematic implements Listener {
         );
     }
 
-    /**
-     * Undoes a scene that never finished (server crash or stop). Runs when the player joins,
-     * which for a banned player only happens once the ban ends.
-     */
     private void restoreSavedState(Player player) {
         PersistentDataContainer data = player.getPersistentDataContainer();
         String saved = data.get(playerStateKey, PersistentDataType.STRING);
@@ -755,7 +720,6 @@ public final class BanCinematic implements Listener {
         try {
             player.setGameMode(GameMode.valueOf(parts[0]));
         } catch (IllegalArgumentException ignored) {
-            // Unknown game mode name: keep the current one.
         }
         if (parts.length > 1) player.setInvulnerable(Boolean.parseBoolean(parts[1]));
         if (parts.length > 2) player.setCollidable(Boolean.parseBoolean(parts[2]));
@@ -769,7 +733,7 @@ public final class BanCinematic implements Listener {
 
     private void punishAndKick(
             CommandSender source,
-            ExecutorIdentity executor,
+            String sourceName,
             Player target,
             String reason,
             Long duration
@@ -778,10 +742,10 @@ public final class BanCinematic implements Listener {
                 ? "messages.ban-screen"
                 : "messages.tempban-screen";
 
-        String finalText = new MessageUtil(plugin).screen(
+        String finalText = plugin.messages().screen(
                 path,
                 reason,
-                executor.name(),
+                sourceName,
                 target.getName(),
                 duration == null ? "" : TimeUtil.format(duration, plugin.messages()::get)
         );
@@ -795,13 +759,12 @@ public final class BanCinematic implements Listener {
                 plugin.sendStaffMessage(source, plugin.messages().component(failedKick));
                 return;
             }
-            banManager.announceBan(target.getName(), reason, executor.name(), duration);
+            banManager.announceBan(target.getName(), reason, sourceName, duration);
             banManager.sendBanConfirmation(source, target.getName(), reason, duration);
         };
 
         if (target.isOnline()) {
-            target.kick(new MessageUtil(plugin).component(finalText));
-            // Wait one server tick so the disconnect completes before the global announcement.
+            target.kick(plugin.messages().component(finalText));
             Bukkit.getScheduler().runTaskLater(plugin, announceAndConfirm, 1L);
         } else {
             announceAndConfirm.run();
@@ -875,16 +838,11 @@ public final class BanCinematic implements Listener {
 
         if (session == null) return;
 
-        // The punishment was already persisted before the cinematic began.
-        // Disconnecting only ends the cinematic; it does not create a duplicate punishment.
         if (beginFinish(session)) {
             cleanup(session);
         }
     }
 
-    /**
-     * Cancela todas as cenas ao desligar o plugin.
-     */
     public void shutdown() {
         for (CinematicSession session :
                 sessions.values().toArray(new CinematicSession[0])) {
@@ -893,7 +851,6 @@ public final class BanCinematic implements Listener {
         sessions.clear();
         pending.clear();
 
-        // Monsters that were fading out are no longer tied to a session.
         for (Entity monster : activeMonsters.values().toArray(new Entity[0])) {
             if (monster.isValid()) monster.remove();
         }
