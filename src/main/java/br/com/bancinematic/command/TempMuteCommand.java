@@ -48,31 +48,31 @@ public final class TempMuteCommand implements CommandExecutor {
 
         if (!CommandUtil.validateReasonLength(plugin, sender, reason)) return true;
 
-        java.util.UUID uuid = CommandUtil.resolveKnownPlayer(plugin, sender, name);
-        if (uuid == null) return true;
-        String sourceName = ExecutorName.from(sender);
-        manager.tempMute(uuid, name, reason, sourceName, seconds).thenAccept(result -> plugin.runSync(() -> {
-            if (result == PunishmentResult.ALREADY_ACTIVE) {
-                sender.sendMessage(plugin.messages().get("messages.already-muted"));
-                return;
-            }
-            if (result != PunishmentResult.SUCCESS) {
-                sender.sendMessage(plugin.messages().get("messages.storage-error"));
-                return;
-            }
-
-            manager.announceMute(name, reason, sourceName, seconds);
-            plugin.sendStaffMessage(sender, plugin.messages().get("messages.temp-muted")
-                    .replace("%player%", name)
-                    .replace("%reason%", reason)
-                    .replace("%time%", TimeUtil.format(seconds, plugin.messages()::get)));
-
-            Player online = Bukkit.getPlayer(uuid);
-            if (online != null) {
-                var mute = manager.get(uuid);
-                if (mute != null) online.sendMessage(manager.muteNotice(mute));
-            }
-        }));
+        CommandUtil.resolveKnownPlayer(plugin, sender, name, uuid -> {
+            String sourceName = ExecutorName.from(sender);
+            manager.tempMute(uuid, name, reason, sourceName, seconds).thenAccept(result -> plugin.runSync(() -> {
+                if (result == PunishmentResult.ALREADY_ACTIVE) {
+                    sender.sendMessage(plugin.messages().get("messages.already-muted"));
+                    return;
+                }
+                if (result != PunishmentResult.SUCCESS) {
+                    sender.sendMessage(plugin.messages().get("messages.storage-error"));
+                    return;
+                }
+    
+                manager.announceMute(name, reason, sourceName, seconds);
+                sender.sendMessage(plugin.messages().get("messages.temp-muted")
+                        .replace("%player%", name)
+                        .replace("%reason%", reason)
+                        .replace("%time%", TimeUtil.format(seconds, plugin.messages()::get)));
+    
+                Player online = Bukkit.getPlayer(uuid);
+                if (online != null) {
+                    var mute = manager.getOnline(uuid);
+                    if (mute != null) online.sendMessage(manager.muteNotice(mute));
+                }
+            }));
+        });
 
         return true;
     }

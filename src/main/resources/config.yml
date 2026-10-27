@@ -2,13 +2,22 @@
 language: br
 
 database:
+  # 0 desliga a sincronização. Para MySQL compartilhado, use 15 a 30 segundos.
+  # Todas as instâncias devem usar o mesmo banco e table-prefix.
+  sync-interval-seconds: 0
+  # Tempo máximo de espera no pré-login, incluindo a fila. Falha ou timeout bloqueia a entrada.
+  login-timeout-seconds: 15
+  # Opcional: separa as tabelas desta instalação das tabelas de outros plugins/servidores.
+  table-prefix: ""
   # SQLITE é local e não exige servidor. Para MySQL, altere para MYSQL e preencha os dados abaixo.
   type: SQLITE
   mysql:
+    # Reutiliza uma conexão, com acesso serializado e reconexão quando ela ficar inválida.
     host: 127.0.0.1
     port: 3306
     database: bancinematic
     username: root
+    # A variável de ambiente BANCINEMATIC_MYSQL_PASSWORD tem prioridade sobre este campo.
     password: ""
     use-ssl: false
     allow-public-key-retrieval: false

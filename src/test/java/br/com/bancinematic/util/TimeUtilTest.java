@@ -29,10 +29,10 @@ class TimeUtilTest {
 
     @Test
     void formatsRemainingTimeWithoutRoundingDown() {
-        assertEquals("permanente", TimeUtil.formatRemaining(null));
-        assertEquals("menos de 1 segundo", TimeUtil.formatRemaining(Instant.now().minusSeconds(1)));
+        assertEquals("permanente", TimeUtil.formatRemaining(null, null));
+        assertEquals("menos de 1 segundo", TimeUtil.formatRemaining(Instant.now().minusSeconds(1), null));
 
-        String remaining = TimeUtil.formatRemaining(Instant.now().plusSeconds(90));
+        String remaining = TimeUtil.formatRemaining(Instant.now().plusSeconds(90), null);
         assertTrue(remaining.startsWith("1 minuto, 30 segundos"), remaining);
     }
 }

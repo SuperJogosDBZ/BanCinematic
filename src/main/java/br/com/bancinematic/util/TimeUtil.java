@@ -38,10 +38,6 @@ public final class TimeUtil {
         }
     }
 
-    public static String format(long seconds) {
-        return format(seconds, null);
-    }
-
     public static String format(long seconds, Function<String, String> translations) {
         if (seconds <= 0) return durationText(translations, "less-than-one-second");
 
@@ -64,10 +60,6 @@ public final class TimeUtil {
         addUnit(parts, seconds, translations, "units.second");
 
         return String.join(durationText(translations, "separator"), parts);
-    }
-
-    public static String formatRemaining(Instant expires) {
-        return formatRemaining(expires, null);
     }
 
     public static String formatRemaining(

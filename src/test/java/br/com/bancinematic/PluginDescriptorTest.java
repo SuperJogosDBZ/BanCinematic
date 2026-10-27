@@ -20,12 +20,15 @@ class PluginDescriptorTest {
             YamlConfiguration descriptor = YamlConfiguration.loadConfiguration(
                     new InputStreamReader(stream, StandardCharsets.UTF_8));
 
-            assertEquals("2.0.6", descriptor.getString("version"));
+            assertEquals("3.0.0", descriptor.getString("version"));
+            assertEquals("1.21.11", descriptor.getString("api-version"));
             assertEquals("SuperJogosDBZ", descriptor.getString("author"));
             assertTrue(descriptor.getStringList("libraries").contains("org.xerial:sqlite-jdbc:3.53.4.0"));
             assertTrue(descriptor.getStringList("libraries").contains("com.mysql:mysql-connector-j:26.7.0"));
-            assertEquals(Set.of("ban", "tempban", "unban", "mute", "tempmute", "unmute", "kick", "history"),
+            assertEquals(Set.of("ban", "tempban", "unban", "mute", "tempmute", "unmute", "kick", "history", "check"),
                     descriptor.getConfigurationSection("commands").getKeys(false));
+            assertEquals("bancinematic.check", descriptor.getString("commands.check.permission"));
+            assertEquals("op", descriptor.getString("permissions.bancinematic.check.default"));
         }
 
         try (InputStream stream = getClass().getResourceAsStream("/config.yml")) {

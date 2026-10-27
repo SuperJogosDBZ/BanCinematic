@@ -15,6 +15,7 @@ public final class MuteManager {
     private final MuteStorage storage;
     private final PunishmentLogger logger;
     private final DatabaseExecutor executor;
+    private final java.util.concurrent.ConcurrentMap<UUID, OnlineMute> online = new java.util.concurrent.ConcurrentHashMap<>();
 
     public MuteManager(BanCinematicPlugin plugin, MuteStorage storage, PunishmentLogger logger,
                        DatabaseExecutor executor) {
@@ -26,8 +27,41 @@ public final class MuteManager {
 
     public BanCinematicPlugin plugin() { return plugin; }
 
-    public boolean isMuted(UUID uuid) { return storage.isMuted(uuid); }
     public MuteData get(UUID uuid) { return storage.get(uuid); }
+    public java.util.List<String> suggestNames(String prefix) { return storage.suggestNames(prefix); }
+
+    public boolean isLoaded(UUID uuid) {
+        OnlineMute state = online.get(uuid);
+        return state != null && state.ready();
+    }
+
+    public MuteData getOnline(UUID uuid) {
+        OnlineMute state = online.get(uuid);
+        MuteData mute = state == null ? null : state.data();
+        return mute != null && !mute.expired() ? mute : null;
+    }
+
+    public CompletableFuture<MuteData> loadOnline(UUID uuid) {
+        OnlineMute loading = new OnlineMute(false, null);
+        online.put(uuid, loading);
+        return executor.submit(() -> storage.get(uuid)).thenApply(data -> {
+            online.computeIfPresent(uuid, (id, current) -> current == loading ? new OnlineMute(true, data) : current);
+            return data;
+        });
+    }
+
+    public void updateOnline(UUID uuid, MuteData data) {
+        online.computeIfPresent(uuid, (id, current) -> new OnlineMute(true, data));
+    }
+
+    public void updateOnlineFromSync(UUID uuid, MuteData data, long expectedRevision) {
+        online.computeIfPresent(uuid, (id, current) -> storage.revision() == expectedRevision
+                ? new OnlineMute(true, data) : current);
+    }
+
+    public void forgetOnline(UUID uuid) { online.remove(uuid); }
+
+    private record OnlineMute(boolean ready, MuteData data) {}
 
     public String muteNotice(MuteData data) {
         String path = data.expires() == null
@@ -65,26 +99,21 @@ public final class MuteManager {
     public CompletableFuture<PunishmentResult> tempMute(UUID uuid, String name, String reason,
                                                         String source, long seconds) {
         return run(() -> save(new MuteData(uuid, name, reason, source, Instant.now().plusSeconds(seconds)),
-                PunishmentType.TEMPMUTE, TimeUtil.format(seconds, plugin.messages()::get)));
+                PunishmentType.TEMPMUTE, seconds));
     }
 
     public CompletableFuture<PunishmentResult> unmute(UUID uuid, String name, String source) {
         return run(() -> {
-            MuteData previous = storage.get(uuid);
-            if (previous == null) return PunishmentResult.NOT_ACTIVE;
-            return storage.removeAndLog(uuid, name, "Removido", source,
-                    PunishmentType.UNMUTE, logger)
-                    ? PunishmentResult.SUCCESS
-                    : PunishmentResult.STORAGE_ERROR;
+            PunishmentResult result = storage.removeAndLog(uuid, name, "Removido", source, PunishmentType.UNMUTE, logger);
+            if (result == PunishmentResult.SUCCESS || result == PunishmentResult.NOT_ACTIVE) updateOnline(uuid, null);
+            return result;
         });
     }
 
-    private PunishmentResult save(MuteData data, PunishmentType type, String duration) {
-        UUID uuid = data.uniqueId();
-        if (storage.get(uuid) != null) return PunishmentResult.ALREADY_ACTIVE;
-        return storage.putAndLog(data, type, duration, logger)
-                ? PunishmentResult.SUCCESS
-                : PunishmentResult.STORAGE_ERROR;
+    private PunishmentResult save(MuteData data, PunishmentType type, Long durationSeconds) {
+        PunishmentResult result = storage.putAndLog(data, type, durationSeconds, logger);
+        if (result == PunishmentResult.SUCCESS) updateOnline(data.uniqueId(), data);
+        return result;
     }
 
     private CompletableFuture<PunishmentResult> run(Supplier<PunishmentResult> task) {

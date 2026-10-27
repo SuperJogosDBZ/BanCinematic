@@ -24,37 +24,23 @@ public final class BanManager {
         this.executor = executor;
     }
 
-    public boolean isBanned(UUID uuid) { return storage.isBanned(uuid); }
     public BanData get(UUID uuid) { return storage.get(uuid); }
+    public java.util.List<String> suggestNames(String prefix) { return storage.suggestNames(prefix); }
 
     public CompletableFuture<PunishmentResult> ban(UUID uuid, String name, String reason, String source) {
-        return run(() -> save(new BanData(uuid, name, reason, source, null),
-                PunishmentType.BAN, null));
+        return run(() -> storage.putAndLog(new BanData(uuid, name, reason, source, null),
+                PunishmentType.BAN, null, logger));
     }
 
     public CompletableFuture<PunishmentResult> tempBan(UUID uuid, String name, String reason,
                                                        String source, long seconds) {
-        return run(() -> save(new BanData(uuid, name, reason, source, Instant.now().plusSeconds(seconds)),
-                PunishmentType.TEMPBAN, TimeUtil.format(seconds, plugin.messages()::get)));
+        return run(() -> storage.putAndLog(new BanData(uuid, name, reason, source, Instant.now().plusSeconds(seconds)),
+                PunishmentType.TEMPBAN, seconds, logger));
     }
 
     public CompletableFuture<PunishmentResult> unban(UUID uuid, String name, String source) {
-        return run(() -> {
-            BanData previous = storage.get(uuid);
-            if (previous == null) return PunishmentResult.NOT_ACTIVE;
-            return storage.removeAndLog(uuid, name, "Removido", source,
-                    PunishmentType.UNBAN, logger)
-                    ? PunishmentResult.SUCCESS
-                    : PunishmentResult.STORAGE_ERROR;
-        });
-    }
-
-    private PunishmentResult save(BanData data, PunishmentType type, String duration) {
-        UUID uuid = data.uniqueId();
-        if (storage.get(uuid) != null) return PunishmentResult.ALREADY_ACTIVE;
-        return storage.putAndLog(data, type, duration, logger)
-                ? PunishmentResult.SUCCESS
-                : PunishmentResult.STORAGE_ERROR;
+        return run(() -> storage.removeAndLog(uuid, name, "Removido", source,
+                PunishmentType.UNBAN, logger));
     }
 
     private CompletableFuture<PunishmentResult> run(java.util.function.Supplier<PunishmentResult> task) {
@@ -88,9 +74,9 @@ public final class BanManager {
                 ? "messages.confirmations.ban"
                 : "messages.confirmations.tempban";
         String message = plugin.messages().raw(path);
-        if (message == null || message.isBlank()) return;
+        if (message.isBlank()) return;
 
-        plugin.sendStaffMessage(sender, plugin.messages().component(message
+        sender.sendMessage(plugin.messages().component(message
                 .replace("%player%", name)
                 .replace("%reason%", reason)
                 .replace("%source%", sender.getName())

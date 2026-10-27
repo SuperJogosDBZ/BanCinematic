@@ -48,32 +48,32 @@ public final class BanCommand implements CommandExecutor, TabCompleter {
         String reason = CommandUtil.joinReason(args, 1);
         if (!CommandUtil.validateReasonLength(plugin, sender, reason)) return true;
 
-        java.util.UUID uuid = CommandUtil.resolveKnownPlayer(plugin, sender, name);
-        if (uuid == null) return true;
-        Player target = Bukkit.getPlayer(uuid);
-
-        if (target != null && cinematic.isRunning(target.getUniqueId())) {
-            sender.sendMessage(plugin.messages().get("messages.cinematic-already-running")
-                    .replace("%player%", target.getName()));
-            return true;
-        }
-
-        if (target != null) {
-            cinematic.start(sender, target, reason, null);
-            return true;
-        }
-
-        String sourceName = ExecutorName.from(sender);
-        manager.ban(uuid, name, reason, sourceName).thenAccept(result -> plugin.runSync(() -> {
-            if (result == PunishmentResult.ALREADY_ACTIVE) {
-                sender.sendMessage(plugin.messages().get("messages.already-banned"));
-            } else if (result != PunishmentResult.SUCCESS) {
-                sender.sendMessage(plugin.messages().get("messages.storage-error"));
-            } else {
-                manager.announceBan(name, reason, sourceName, null);
-                manager.sendBanConfirmation(sender, name, reason, null);
+        CommandUtil.resolveKnownPlayer(plugin, sender, name, uuid -> {
+            Player target = Bukkit.getPlayer(uuid);
+    
+            if (target != null && cinematic.isRunning(target.getUniqueId())) {
+                sender.sendMessage(plugin.messages().get("messages.cinematic-already-running")
+                        .replace("%player%", target.getName()));
+                return;
             }
-        }));
+    
+            if (target != null) {
+                cinematic.start(sender, target, reason, null);
+                return;
+            }
+    
+            String sourceName = ExecutorName.from(sender);
+            manager.ban(uuid, name, reason, sourceName).thenAccept(result -> plugin.runSync(() -> {
+                if (result == PunishmentResult.ALREADY_ACTIVE) {
+                    sender.sendMessage(plugin.messages().get("messages.already-banned"));
+                } else if (result != PunishmentResult.SUCCESS) {
+                    sender.sendMessage(plugin.messages().get("messages.storage-error"));
+                } else {
+                    manager.announceBan(name, reason, sourceName, null);
+                    manager.sendBanConfirmation(sender, name, reason, null);
+                }
+            }));
+        });
 
         return true;
     }

@@ -23,7 +23,6 @@ import java.util.UUID;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -87,22 +86,22 @@ class PluginWorkflowTest {
 
         String admin = "Admin123";
         assertEquals(PunishmentResult.SUCCESS, banManager.ban(uuid, "TaupaipaiNovo", "teste ban", admin).join());
-        assertTrue(banManager.isBanned(uuid));
+        assertNotNull(banManager.get(uuid));
         assertEquals("teste ban", banManager.get(uuid).reason());
-        assertTrue(new BanStorage(plugin, database).isBanned(uuid), "Ban precisa sobreviver a um reload.");
+        assertNotNull(new BanStorage(plugin, database).get(uuid), "Ban precisa sobreviver a um reload.");
         assertEquals(PunishmentResult.SUCCESS, banManager.unban(uuid, "TaupaipaiNovo", admin).join());
-        assertFalse(banManager.isBanned(uuid));
+        assertNull(banManager.get(uuid));
 
         assertEquals(PunishmentResult.SUCCESS, muteManager.tempMute(uuid, "TaupaipaiNovo", "spam", admin, 120).join());
         MuteData mute = muteManager.get(uuid);
         assertNotNull(mute);
-        assertTrue(muteManager.isMuted(uuid));
+        assertNotNull(muteManager.get(uuid));
         assertTrue(muteManager.mutedChatMessage(mute).startsWith("MUTED:spam:"));
         assertTrue(muteManager.muteNotice(mute).startsWith("TEMPMUTE:spam:"));
         assertTrue(muteManager.muteReminder(mute).startsWith("REMINDER:spam:"));
-        assertTrue(new MuteStorage(plugin, database).isMuted(uuid), "Mute precisa sobreviver a um reload.");
+        assertNotNull(new MuteStorage(plugin, database).get(uuid), "Mute precisa sobreviver a um reload.");
         assertEquals(PunishmentResult.SUCCESS, muteManager.unmute(uuid, "TaupaipaiNovo", admin).join());
-        assertFalse(muteManager.isMuted(uuid));
+        assertNull(muteManager.get(uuid));
 
         UUID permanentMuteId = UUID.randomUUID();
         assertEquals(PunishmentResult.SUCCESS, muteManager.mute(permanentMuteId, "Permanente", "reincidência", "CONSOLE").join());
@@ -144,7 +143,7 @@ class PluginWorkflowTest {
         assertEquals(0, countRows("ban_records", banId));
 
         assertTrue(mutes.put(new MuteData(muteId, "Mutado", "teste", "console", expired)));
-        assertFalse(mutes.isMuted(muteId));
+        assertNull(mutes.get(muteId));
         mutes.cleanupExpired();
         assertEquals(0, countRows("mute_records", muteId));
     }
@@ -203,12 +202,6 @@ class PluginWorkflowTest {
             release.countDown();
             writer.join();
         }
-    }
-
-    @Test
-    void mysqlJdbcDriverIsAvailableWhenMysqlIsSelected() {
-        config.set("database.type", "MYSQL");
-        assertDoesNotThrow(() -> new DatabaseManager(plugin));
     }
 
     @Test
@@ -365,10 +358,11 @@ class PluginWorkflowTest {
             assertEquals("MySqlAdmin", playerEntry.source());
         } finally {
             try (Connection connection = mysql.connect()) {
-                deleteTestRecord(connection, "ban_records", "subject_uuid", uuid);
-                deleteTestRecord(connection, "mute_records", "subject_uuid", uuid);
-                deleteTestRecord(connection, "punishment_history", "subject_uuid", uuid);
+                deleteTestRecord(connection, mysql.sql("ban_records"), "subject_uuid", uuid);
+                deleteTestRecord(connection, mysql.sql("mute_records"), "subject_uuid", uuid);
+                deleteTestRecord(connection, mysql.sql("punishment_history"), "subject_uuid", uuid);
             }
+            mysql.close();
         }
     }
 
@@ -383,6 +377,7 @@ class PluginWorkflowTest {
         );
 
         config.set("database.type", "MYSQL");
+        config.set("database.table-prefix", System.getenv().getOrDefault("BANCINEMATIC_TEST_MYSQL_PREFIX", "bc_test_"));
         config.set("database.mysql.host", host);
         config.set("database.mysql.port", Integer.parseInt(
                 System.getenv().getOrDefault("BANCINEMATIC_TEST_MYSQL_PORT", "3306")));

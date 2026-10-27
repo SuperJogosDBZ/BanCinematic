@@ -5,6 +5,7 @@ import br.com.bancinematic.punishment.BanManager;
 import br.com.bancinematic.punishment.PunishmentResult;
 import br.com.bancinematic.util.ExecutorName;
 import br.com.bancinematic.util.TimeUtil;
+import io.papermc.paper.event.player.PlayerClientLoadedWorldEvent;
 import org.bukkit.*;
 import org.bukkit.attribute.Attribute;
 import org.bukkit.attribute.AttributeInstance;
@@ -19,6 +20,8 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerRespawnEvent;
+import org.bukkit.event.player.PlayerChangedWorldEvent;
 import org.bukkit.event.player.PlayerCommandPreprocessEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerDropItemEvent;
@@ -43,10 +46,11 @@ public final class BanCinematic implements Listener {
     private final BanManager banManager;
     private final Map<UUID, CinematicSession> sessions = new HashMap<>();
     private final Set<UUID> pending = new HashSet<>();
+    private final Set<Player> loadedClients = Collections.newSetFromMap(new IdentityHashMap<>());
     private final Map<UUID, Entity> activeMonsters = new HashMap<>();
     private final NamespacedKey playerStateKey;
 
-        public BanCinematic(BanCinematicPlugin plugin, BanManager banManager) {
+    public BanCinematic(BanCinematicPlugin plugin, BanManager banManager) {
         this.plugin = plugin;
         this.banManager = banManager;
         this.playerStateKey = new NamespacedKey(plugin, "cinematic-player-state");
@@ -124,11 +128,12 @@ public final class BanCinematic implements Listener {
         }
         final Player cinematicTarget = currentTarget;
 
-        plugin.sendStaffMessage(source, plugin.messages().get("messages.ban-started")
+        source.sendMessage(plugin.messages().get("messages.ban-started")
                 .replace("%player%", cinematicTarget.getName()));
 
         CinematicSettings settings = CinematicSettings.from(plugin.getConfig());
-        if (!settings.enabled()) {
+        // A proteção temporária do login não pode ser salva como invulnerabilidade permanente.
+        if (!settings.enabled() || !loadedClients.contains(cinematicTarget)) {
             punishAndKick(source, sourceName, cinematicTarget, reason, duration);
             return;
         }
@@ -524,7 +529,7 @@ public final class BanCinematic implements Listener {
         if (monster != null && monster.isValid()) {
             face(monster, target);
             if (monster.getType() == EntityType.WARDEN) {
-                monster.playEffect(EntityEffect.WARDEN_ATTACK);
+                monster.playEffect(EntityEffect.ENTITY_ATTACK);
             }
         }
 
@@ -756,7 +761,7 @@ public final class BanCinematic implements Listener {
                         "messages.ban-kick-failed",
                         "&cO ban foi salvo, mas o jogador continua conectado."
                 ).replace("%player%", target.getName());
-                plugin.sendStaffMessage(source, plugin.messages().component(failedKick));
+                source.sendMessage(plugin.messages().component(failedKick));
                 return;
             }
             banManager.announceBan(target.getName(), reason, sourceName, duration);
@@ -828,11 +833,32 @@ public final class BanCinematic implements Listener {
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
         Player player = event.getPlayer();
+        loadedClients.remove(player);
         restoreSavedState(player);
     }
 
     @EventHandler
+    public void onClientLoadedWorld(PlayerClientLoadedWorldEvent event) {
+        if (event.isTimeout()) {
+            loadedClients.remove(event.getPlayer());
+        } else {
+            loadedClients.add(event.getPlayer());
+        }
+    }
+
+    @EventHandler
+    public void onRespawn(PlayerRespawnEvent event) {
+        loadedClients.remove(event.getPlayer());
+    }
+
+    @EventHandler
+    public void onChangedWorld(PlayerChangedWorldEvent event) {
+        loadedClients.remove(event.getPlayer());
+    }
+
+    @EventHandler
     public void onQuit(PlayerQuitEvent event) {
+        loadedClients.remove(event.getPlayer());
         CinematicSession session =
                 sessions.get(event.getPlayer().getUniqueId());
 
@@ -850,6 +876,7 @@ public final class BanCinematic implements Listener {
         }
         sessions.clear();
         pending.clear();
+        loadedClients.clear();
 
         for (Entity monster : activeMonsters.values().toArray(new Entity[0])) {
             if (monster.isValid()) monster.remove();

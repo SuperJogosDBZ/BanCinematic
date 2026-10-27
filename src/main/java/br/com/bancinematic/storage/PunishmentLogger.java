@@ -28,11 +28,13 @@ public final class PunishmentLogger {
     }
 
     public boolean log(PunishmentType type, UUID playerId, String player,
-                       String reason, String source, String duration) {
+                       String reason, String source, Long durationSeconds) {
         Objects.requireNonNull(playerId, "A UUID do jogador é obrigatória no histórico.");
-        try (Connection connection = database.connect()) {
-            log(connection, type, playerId, player, reason, source, duration);
-            return true;
+        try {
+            return database.execute(connection -> {
+                log(connection, type, playerId, player, reason, source, durationSeconds);
+                return true;
+            });
         } catch (SQLException exception) {
             plugin.getLogger().severe("Não foi possível salvar o histórico de punições: " + exception.getMessage());
             return false;
@@ -40,14 +42,14 @@ public final class PunishmentLogger {
     }
 
     void log(Connection connection, PunishmentType type, UUID playerId, String player,
-             String reason, String source, String duration) throws SQLException {
+             String reason, String source, Long durationSeconds) throws SQLException {
         Objects.requireNonNull(connection, "A conexão é obrigatória no histórico.");
         Objects.requireNonNull(playerId, "A UUID do jogador é obrigatória no histórico.");
         Instant punishedAt = Instant.now();
-        try (PreparedStatement statement = connection.prepareStatement(
+        try (PreparedStatement statement = connection.prepareStatement(database.sql(
                      "INSERT INTO punishment_history "
-                             + "(id, subject_uuid, punishment_type, player, reason, source, punished_at, duration)"
-                             + " VALUES (?, ?, ?, ?, ?, ?, ?, ?)")) {
+                             + "(id, subject_uuid, punishment_type, player, reason, source, punished_at, duration_seconds)"
+                             + " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"))) {
             statement.setString(1, UUID.randomUUID().toString());
             statement.setString(2, playerId.toString());
             statement.setString(3, type.name());
@@ -55,7 +57,8 @@ public final class PunishmentLogger {
             statement.setString(5, reason);
             statement.setString(6, source);
             statement.setString(7, HISTORY_DATE_FORMAT.format(punishedAt));
-            statement.setString(8, duration);
+            if (durationSeconds == null) statement.setNull(8, java.sql.Types.BIGINT);
+            else statement.setLong(8, durationSeconds);
             statement.executeUpdate();
         }
     }
@@ -66,46 +69,51 @@ public final class PunishmentLogger {
         if (limit < 1) throw new IllegalArgumentException("O tamanho da página deve ser positivo.");
 
         String countSql = "SELECT COUNT(*) FROM punishment_history WHERE subject_uuid = ?";
-        String pageSql = "SELECT id, subject_uuid, punishment_type, player, reason, source, punished_at, duration"
+        String pageSql = "SELECT id, subject_uuid, punishment_type, player, reason, source, punished_at, duration_seconds"
                 + " FROM punishment_history WHERE subject_uuid = ?"
                 + " ORDER BY punished_at DESC, id DESC LIMIT ? OFFSET ?";
         List<HistoryEntry> entries = new ArrayList<>();
-        try (Connection connection = database.connect()) {
-            long totalEntries;
-            try (PreparedStatement count = connection.prepareStatement(countSql)) {
-                count.setString(1, playerId.toString());
-                try (ResultSet result = count.executeQuery()) {
-                    totalEntries = result.next() ? result.getLong(1) : 0;
-                }
-            }
-            if (offset >= totalEntries) return new HistoryPage(totalEntries, List.of());
-
-            try (PreparedStatement statement = connection.prepareStatement(pageSql)) {
-                statement.setString(1, playerId.toString());
-                statement.setInt(2, limit);
-                statement.setLong(3, offset);
-                try (ResultSet result = statement.executeQuery()) {
-                    while (result.next()) {
-                        UUID uuid = parseUuid(result.getString("subject_uuid"));
-                        if (uuid == null) continue;
-                        entries.add(new HistoryEntry(
-                                result.getString("id"),
-                                uuid,
-                                result.getString("punishment_type"),
-                                result.getString("player"),
-                                result.getString("reason"),
-                                result.getString("source"),
-                                result.getString("punished_at"),
-                                result.getString("duration")
-                        ));
+        try {
+            return database.execute(connection -> {
+                long totalEntries;
+                try (PreparedStatement count = connection.prepareStatement(database.sql(countSql))) {
+                    count.setString(1, playerId.toString());
+                    try (ResultSet result = count.executeQuery()) {
+                        totalEntries = result.next() ? result.getLong(1) : 0;
                     }
                 }
-            }
-            return new HistoryPage(totalEntries, entries);
+                if (offset >= totalEntries) return new HistoryPage(totalEntries, List.of());
+                try (PreparedStatement statement = connection.prepareStatement(database.sql(pageSql))) {
+                    statement.setString(1, playerId.toString());
+                    statement.setInt(2, limit);
+                    statement.setLong(3, offset);
+                    try (ResultSet result = statement.executeQuery()) {
+                        while (result.next()) {
+                            UUID uuid = parseUuid(result.getString("subject_uuid"));
+                            if (uuid == null) continue;
+                            entries.add(new HistoryEntry(
+                                    result.getString("id"),
+                                    uuid,
+                                    result.getString("punishment_type"),
+                                    result.getString("player"),
+                                    result.getString("reason"),
+                                    result.getString("source"),
+                                    result.getString("punished_at"),
+                                    nullableLong(result, "duration_seconds")
+                                    ));
+                        }
+                    }
+                }
+                return new HistoryPage(totalEntries, entries);
+            });
         } catch (SQLException exception) {
-            plugin.getLogger().severe("Não foi possível consultar o histórico de punições: " + exception.getMessage());
-            return new HistoryPage(0, List.of());
+            throw new IllegalStateException("Não foi possível consultar o histórico de punições.", exception);
         }
+    }
+
+    private static Long nullableLong(ResultSet result, String column) throws SQLException {
+        long value = result.getLong(column);
+        return result.wasNull() ? null : value;
     }
 
     private static UUID parseUuid(String value) {
@@ -131,7 +139,7 @@ public final class PunishmentLogger {
             String reason,
             String source,
             String date,
-            String duration
+            Long durationSeconds
     ) {
         public HistoryEntry {
             Objects.requireNonNull(uniqueId, "A UUID é obrigatória em cada registro de histórico.");

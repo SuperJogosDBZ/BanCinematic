@@ -2,7 +2,6 @@ package br.com.bancinematic.command;
 
 import br.com.bancinematic.BanCinematicPlugin;
 import br.com.bancinematic.util.InputLimits;
-import br.com.bancinematic.util.PlayerIdentity;
 import org.bukkit.command.CommandSender;
 
 import java.util.UUID;
@@ -25,13 +24,34 @@ final class CommandUtil {
                 .collect(Collectors.joining(" "));
     }
 
-    static UUID resolveKnownPlayer(BanCinematicPlugin plugin, CommandSender sender, String name) {
-        UUID uuid = PlayerIdentity.resolveKnown(plugin, name);
-        if (uuid == null) {
-            sender.sendMessage(plugin.messages().get("messages.player-never-joined"));
-        }
-        return uuid;
+    static <T> void query(BanCinematicPlugin plugin, CommandSender sender,
+                          java.util.function.Supplier<T> query, java.util.function.Consumer<T> action) {
+        plugin.databaseExecutor().submit(query).whenComplete((result, error) -> plugin.runSync(() -> {
+            if (error != null) {
+                plugin.getLogger().warning("Falha ao consultar dados do comando: " + error);
+                sender.sendMessage(plugin.messages().get("messages.storage-error"));
+            } else action.accept(result);
+        }));
     }
+
+    static void resolveKnownPlayer(BanCinematicPlugin plugin, CommandSender sender, String name,
+                                   java.util.function.Consumer<UUID> action) {
+        query(plugin, sender, () -> plugin.identities().resolve(name), uuid -> {
+            if (uuid == null) sender.sendMessage(plugin.messages().get("messages.player-never-joined"));
+            else action.accept(uuid);
+        });
+    }
+
+    static Target target(BanCinematicPlugin plugin, String input,
+                         java.util.function.Function<UUID, String> storedName) {
+        UUID explicit = parseUuid(input);
+        UUID uuid = explicit == null ? plugin.identities().resolve(input) : explicit;
+        if (uuid == null) return null;
+        String name = explicit == null ? input : storedName.apply(uuid);
+        return new Target(uuid, name == null || name.isBlank() ? input : name);
+    }
+
+    record Target(UUID uuid, String name) {}
 
     static boolean validateReasonLength(BanCinematicPlugin plugin, CommandSender sender, String reason) {
         if (reason.length() <= InputLimits.MAX_REASON_LENGTH) return true;
@@ -44,5 +64,14 @@ final class CommandUtil {
         if (br.com.bancinematic.util.TimeUtil.parse(args[1]) != null) return 1;
         int lastIndex = args.length - 1;
         return br.com.bancinematic.util.TimeUtil.parse(args[lastIndex]) != null ? lastIndex : -1;
+    }
+    static UUID parseUuid(String input) {
+        String compact = input.replace("-", "");
+        if (!input.matches("[0-9a-fA-F]{32}")
+                && !input.matches("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")) {
+            return null;
+        }
+        return UUID.fromString(compact.substring(0, 8) + "-" + compact.substring(8, 12) + "-"
+                + compact.substring(12, 16) + "-" + compact.substring(16, 20) + "-" + compact.substring(20));
     }
 }

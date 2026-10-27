@@ -58,41 +58,28 @@ public final class KickCommand implements CommandExecutor {
         String targetName = target.getName();
         String sourceName = ExecutorName.from(sender);
 
+        String finalMessage = plugin.messages().screen(
+                "messages.kick-screen", reason, sourceName, targetName, ""
+        );
+        target.kick(plugin.messages().component(finalMessage));
+        plugin.broadcastPunishment("messages.broadcast.kick", targetName, reason, sourceName, "");
+        String confirmation = plugin.messages().get("messages.confirmations.kick")
+                .replace("%player%", targetName)
+                .replace("%reason%", reason);
+        sender.sendMessage(plugin.messages().component(confirmation));
+
+        // A fila e falhas do histórico não podem impedir a expulsão.
         plugin.databaseExecutor()
                 .submit(() -> logger.log(PunishmentType.KICK, uuid, targetName, reason, sourceName, null))
-                .exceptionally(error -> {
-                    plugin.getLogger().severe("Falha inesperada ao gravar o kick: " + error);
-                    return false;
-                })
-                .thenAccept(saved -> plugin.runSync(() -> {
-                    if (!saved) {
-                        sender.sendMessage(plugin.messages().get("messages.storage-error"));
-                        return;
+                .whenComplete((saved, error) -> {
+                    if (error != null) {
+                        plugin.getLogger().severe("Falha inesperada ao gravar o histórico do kick de "
+                                + targetName + " (" + uuid + "): " + error);
+                    } else if (!Boolean.TRUE.equals(saved)) {
+                        plugin.getLogger().warning("O kick de " + targetName + " (" + uuid
+                                + ") foi executado, mas seu histórico não foi salvo.");
                     }
-                    Player currentTarget = Bukkit.getPlayer(uuid);
-                    if (currentTarget == null) {
-                        sender.sendMessage(plugin.messages().get("messages.player-not-found"));
-                        return;
-                    }
-
-                    String currentTargetName = currentTarget.getName();
-
-                    String finalMessage = plugin.messages().screen(
-                            "messages.kick-screen",
-                            reason,
-                            sourceName,
-                            currentTargetName,
-                            ""
-                    );
-
-                    plugin.broadcastPunishment("messages.broadcast.kick", currentTargetName, reason, sourceName, "");
-                    currentTarget.kick(plugin.messages().component(finalMessage));
-                    String confirmation = plugin.messages().get("messages.confirmations.kick")
-                            .replace("%player%", currentTargetName)
-                            .replace("%reason%", reason);
-                    sender.sendMessage(plugin.messages().component(confirmation));
-                }));
-
+                });
         return true;
     }
 }

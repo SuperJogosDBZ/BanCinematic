@@ -1,8 +1,6 @@
 package br.com.bancinematic;
 
 import org.bukkit.Bukkit;
-import org.bukkit.command.CommandSender;
-import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Player;
@@ -18,7 +16,6 @@ import br.com.bancinematic.punishment.BanManager;
 import br.com.bancinematic.punishment.MuteManager;
 import br.com.bancinematic.storage.*;
 import org.bukkit.plugin.java.JavaPlugin;
-import net.kyori.adventure.text.Component;
 
 import java.io.File;
 import java.io.IOException;
@@ -29,14 +26,10 @@ import java.util.Locale;
 
 public final class BanCinematicPlugin extends JavaPlugin {
     private final MessageUtil messages = new MessageUtil(this);
-    private BanStorage banStorage;
-    private MuteStorage muteStorage;
-    private PunishmentLogger punishmentLogger;
     private DatabaseManager database;
     private DatabaseExecutor databaseExecutor;
     private IdentityStorage identityStorage;
-    private BanManager banManager;
-    private MuteManager muteManager;
+    private volatile BanManager banManager;
     private BanCinematic cinematic;
     private FileConfiguration languageConfig;
 
@@ -50,6 +43,11 @@ public final class BanCinematicPlugin extends JavaPlugin {
         saveConfig();
         loadLanguageConfig();
 
+        getServer().getPluginManager().registerEvents(new BanLoginListener(this, () -> banManager), this);
+
+        BanStorage banStorage;
+        MuteStorage muteStorage;
+        PunishmentLogger punishmentLogger;
         databaseExecutor = DatabaseExecutor.create();
         try {
             database = new DatabaseManager(this);
@@ -62,17 +60,23 @@ public final class BanCinematicPlugin extends JavaPlugin {
             getLogger().severe("O BanCinematic não pôde inicializar o banco de dados: " + exception.getMessage());
             getLogger().log(java.util.logging.Level.SEVERE, "Detalhes do erro", exception);
             databaseExecutor.close();
-            getServer().getPluginManager().disablePlugin(this);
+            if (database != null) database.close();
+            getLogger().severe("Novas entradas permanecerão bloqueadas. Corrija o banco e reinicie o servidor.");
+            for (String name : java.util.List.of("ban", "tempban", "unban", "mute", "tempmute", "unmute", "kick", "history", "check")) {
+                register(name, (sender, command, label, args) -> {
+                    sender.sendMessage(messages().get("messages.storage-error"));
+                    return true;
+                });
+            }
             return;
         }
 
         banManager = new BanManager(this, banStorage, punishmentLogger, databaseExecutor);
-        muteManager = new MuteManager(this, muteStorage, punishmentLogger, databaseExecutor);
+        MuteManager muteManager = new MuteManager(this, muteStorage, punishmentLogger, databaseExecutor);
 
         cinematic = new BanCinematic(this, banManager);
         getServer().getPluginManager().registerEvents(new ChatListener(muteManager), this);
-        getServer().getPluginManager().registerEvents(new MuteJoinListener(muteManager), this);
-        getServer().getPluginManager().registerEvents(new BanLoginListener(this, banManager), this);
+        getServer().getPluginManager().registerEvents(new MuteJoinListener(this, banManager, muteManager), this);
         getServer().getPluginManager().registerEvents(new PlayerIdentityListener(this), this);
 
         register("ban", new BanCommand(this, banManager, cinematic));
@@ -83,11 +87,15 @@ public final class BanCinematicPlugin extends JavaPlugin {
         register("unmute", new UnmuteCommand(this, muteManager));
         register("kick", new KickCommand(this, punishmentLogger));
         register("history", new HistoryCommand(this, punishmentLogger));
+        register("check", new CheckCommand(this, banManager, muteManager));
+        getServer().getPluginManager().registerEvents(new PunishmentTabListener(this, banManager, muteManager), this);
 
         getServer().getScheduler().runTaskTimer(this, () -> {
             databaseExecutor.execute(muteStorage::cleanupExpired);
             databaseExecutor.execute(banStorage::cleanupExpired);
         }, 20L * 60L, 20L * 60L);
+
+        new DatabaseSync(this, banStorage, muteStorage, identityStorage, muteManager, cinematic).start();
 
         getLogger().info("BanCinematic " + getDescription().getVersion() + " habilitado.");
     }
@@ -122,7 +130,7 @@ public final class BanCinematicPlugin extends JavaPlugin {
 
     public void broadcastPunishment(String path, String player, String reason, String source, String time) {
         String message = messages().raw(path);
-        if (message == null || message.isBlank()) return;
+        if (message.isBlank()) return;
         message = message
                 .replace("%player%", player)
                 .replace("%reason%", reason)
@@ -132,16 +140,6 @@ public final class BanCinematicPlugin extends JavaPlugin {
         for (Player onlinePlayer : Bukkit.getOnlinePlayers()) {
             onlinePlayer.sendMessage(component);
         }
-    }
-
-    public void sendStaffMessage(CommandSender recipient, String message) {
-        if (recipient instanceof ConsoleCommandSender) return;
-        recipient.sendMessage(message);
-    }
-
-    public void sendStaffMessage(CommandSender recipient, Component message) {
-        if (recipient instanceof ConsoleCommandSender) return;
-        recipient.sendMessage(message);
     }
 
     private void ensureLanguageFiles() {
@@ -193,5 +191,6 @@ public final class BanCinematicPlugin extends JavaPlugin {
     public void onDisable() {
         if (cinematic != null) cinematic.shutdown();
         if (databaseExecutor != null) databaseExecutor.close();
+        if (database != null) database.close();
     }
 }

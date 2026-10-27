@@ -5,12 +5,10 @@ import br.com.bancinematic.cinematic.BanCinematic;
 import br.com.bancinematic.punishment.BanManager;
 import br.com.bancinematic.punishment.PunishmentResult;
 import br.com.bancinematic.util.ExecutorName;
-import br.com.bancinematic.util.PlayerIdentity;
-import org.bukkit.Bukkit;
 import org.bukkit.command.*;
-import org.bukkit.entity.Player;
 
 import java.util.List;
+import java.util.UUID;
 
 public final class UnbanCommand implements CommandExecutor, TabCompleter {
     private final BanCinematicPlugin plugin;
@@ -30,37 +28,38 @@ public final class UnbanCommand implements CommandExecutor, TabCompleter {
             return true;
         }
 
-        String name = args[0];
-        java.util.UUID uuid = PlayerIdentity.resolveKnown(plugin, name);
-        if (uuid == null) {
-            sender.sendMessage(plugin.messages().get("messages.already-unbanned"));
-            return true;
-        }
-
-        if (cinematic.isRunning(uuid)) {
-            sender.sendMessage(plugin.messages().get("messages.unban-blocked-during-ban")
-                    .replace("%player%", name));
-            return true;
-        }
-
-        manager.unban(uuid, name, ExecutorName.from(sender)).thenAccept(result -> plugin.runSync(() -> {
-            if (result == PunishmentResult.NOT_ACTIVE) {
+        String input = args[0];
+        CommandUtil.query(plugin, sender, () -> CommandUtil.target(plugin, input, uuid -> {
+            var ban = manager.get(uuid);
+            return ban == null ? null : ban.name();
+        }), target -> {
+            if (target == null) {
                 sender.sendMessage(plugin.messages().get("messages.already-unbanned"));
-            } else if (result != PunishmentResult.SUCCESS) {
-                sender.sendMessage(plugin.messages().get("messages.storage-error"));
-            } else {
-                sender.sendMessage(plugin.messages().get("messages.unbanned").replace("%player%", name));
+                return;
             }
-        }));
+            UUID uuid = target.uuid();
+            String name = target.name();
+            if (cinematic.isRunning(uuid)) {
+                sender.sendMessage(plugin.messages().get("messages.unban-blocked-during-ban")
+                        .replace("%player%", name));
+                return;
+            }
+    
+            manager.unban(uuid, name, ExecutorName.from(sender)).thenAccept(result -> plugin.runSync(() -> {
+                if (result == PunishmentResult.NOT_ACTIVE) {
+                    sender.sendMessage(plugin.messages().get("messages.already-unbanned"));
+                } else if (result != PunishmentResult.SUCCESS) {
+                    sender.sendMessage(plugin.messages().get("messages.storage-error"));
+                } else {
+                    sender.sendMessage(plugin.messages().get("messages.unbanned").replace("%player%", name));
+                }
+            }));
+        });
         return true;
     }
 
     @Override
     public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
-        if (args.length != 1) return List.of();
-        return Bukkit.getOnlinePlayers().stream()
-                .map(Player::getName)
-                .filter(name -> name.toLowerCase().startsWith(args[0].toLowerCase()))
-                .sorted().toList();
+        return List.of();
     }
 }

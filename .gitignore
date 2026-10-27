@@ -1,11 +1,6 @@
 /target/
-*.db
-*.db-shm
-*.db-wal
-*.sqlite
-*.sqlite3
-.idea/
-.vscode/
-*.iml
-.DS_Store
-Thumbs.db
+/entregas/
+/.runtime-test/
+*.log
+hs_err_pid*.log
+replay_pid*.log

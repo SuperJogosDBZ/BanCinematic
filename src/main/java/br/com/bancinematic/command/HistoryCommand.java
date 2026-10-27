@@ -2,8 +2,8 @@ package br.com.bancinematic.command;
 
 import br.com.bancinematic.BanCinematicPlugin;
 import br.com.bancinematic.storage.PunishmentLogger;
-import br.com.bancinematic.util.PlayerIdentity;
 import br.com.bancinematic.util.InputLimits;
+import br.com.bancinematic.util.TimeUtil;
 import org.bukkit.ChatColor;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -52,22 +52,13 @@ public final class HistoryCommand implements CommandExecutor {
         }
 
         String player = args[0];
-        java.util.UUID uuid = PlayerIdentity.resolveKnown(plugin, player);
-        if (uuid == null) {
-            sender.sendMessage(message("no-records", "player", player));
-            return true;
-        }
         long offset = (long) (page - 1) * ENTRIES_PER_PAGE;
         final int requestedPage = page;
-
-        plugin.databaseExecutor()
-                .submit(() -> logger.getHistoryPage(uuid, offset, ENTRIES_PER_PAGE))
-                .exceptionally(error -> {
-                    plugin.getLogger().severe("Falha inesperada ao consultar o histórico: " + error);
-                    return new PunishmentLogger.HistoryPage(0, List.of());
-                })
-                .thenAccept(history -> plugin.runSync(
-                        () -> showPage(sender, player, requestedPage, offset, history)));
+        CommandUtil.query(plugin, sender, () -> {
+            var uuid = plugin.identities().resolve(player);
+            return uuid == null ? new PunishmentLogger.HistoryPage(0, List.of())
+                    : logger.getHistoryPage(uuid, offset, ENTRIES_PER_PAGE);
+        }, history -> showPage(sender, player, requestedPage, offset, history));
         return true;
     }
 
@@ -107,9 +98,9 @@ public final class HistoryCommand implements CommandExecutor {
                     "type", formatType(entry.type()),
                     "date", formatDate(entry.date())));
             if (!removal) {
-                String duration = entry.duration() == null || entry.duration().isBlank()
+                String duration = entry.durationSeconds() == null
                         ? plugin.messages().get("messages.history.permanent")
-                        : entry.duration();
+                        : TimeUtil.format(entry.durationSeconds(), plugin.messages()::get);
                 sender.sendMessage(message("reason", "reason", entry.reason()));
                 sender.sendMessage(message(durationVisible ? "staff" : "staff-last", "staff", entry.source()));
                 if (durationVisible) sender.sendMessage(message("duration", "duration", duration));

@@ -1,7 +1,7 @@
 name: BanCinematic
-version: 2.0.6
+version: 3.0.0
 main: br.com.bancinematic.BanCinematicPlugin
-api-version: '1.21'
+api-version: '1.21.11'
 author: SuperJogosDBZ
 description: Sistema modular de punições com banimento cinematográfico.
 
@@ -10,6 +10,10 @@ libraries:
   - com.mysql:mysql-connector-j:26.7.0
 
 commands:
+  check:
+    description: Consulta identidade, última entrada e punições ativas.
+    usage: /check <jogador>
+    permission: bancinematic.check
   ban:
     description: Bane um jogador.
     usage: /ban <jogador> <motivo>
@@ -20,7 +24,7 @@ commands:
     permission: bancinematic.tempban
   unban:
     description: Remove o banimento de um jogador.
-    usage: /unban <jogador>
+    usage: /unban <jogador|UUID>
     permission: bancinematic.unban
   mute:
     description: Silencia um jogador.
@@ -32,7 +36,7 @@ commands:
     permission: bancinematic.tempmute
   unmute:
     description: Remove o mute de um jogador.
-    usage: /unmute <jogador>
+    usage: /unmute <jogador|UUID>
     permission: bancinematic.unmute
   kick:
     description: Expulsa um jogador.
@@ -44,6 +48,9 @@ commands:
     permission: bancinematic.history
 
 permissions:
+  bancinematic.check:
+    description: Permite consultar dados e punições ativas de jogadores.
+    default: op
   bancinematic.ban:
     default: op
   bancinematic.tempban:

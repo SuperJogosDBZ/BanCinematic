@@ -17,7 +17,11 @@ public final class ChatListener implements Listener {
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
     public void onChat(AsyncPlayerChatEvent event) {
-        MuteData data = muteManager.get(
+        if (!muteManager.isLoaded(event.getPlayer().getUniqueId())) {
+            event.setCancelled(true);
+            return;
+        }
+        MuteData data = muteManager.getOnline(
                 event.getPlayer().getUniqueId()
         );
 
