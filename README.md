@@ -36,4 +36,4 @@ SQLite is enabled by default. Database libraries download automatically on first
 
 ## Compatibility
 
-Use Java 21 for Paper 1.21.11 and Java 25 for Paper 26.1 or later. Version 3.0.1 was functionally tested on Paper 1.21.11 with SQLite. Earlier revisions were tested on Paper 1.21.11, 26.1.2, 26.2, and 26.3 with SQLite and MySQL. Future Paper releases require validation.
+Use Java 21 for Paper 1.21.11 and Java 25 for Paper 26.1 or later. Version 3.0.3 was visually tested on Paper 1.21.11 and passed SQLite and MySQL tests. Earlier revisions were tested on Paper 1.21.11, 26.1.2, 26.2, and 26.3 with SQLite and MySQL. Future Paper releases require validation.
