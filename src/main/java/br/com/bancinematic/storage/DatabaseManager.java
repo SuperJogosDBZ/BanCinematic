@@ -25,9 +25,9 @@ public final class DatabaseManager implements AutoCloseable {
     private final String jdbcUrl;
     private final Properties properties = new Properties();
     private final String tablePrefix;
-    private Connection mysqlConnection;
+    private Connection sharedConnection;
     private final LongSupplier nanoTime;
-    private long mysqlLastUsedNanos;
+    private long lastUsedNanos;
     private boolean closed;
 
     public DatabaseManager(BanCinematicPlugin plugin) throws SQLException {
@@ -81,20 +81,21 @@ public final class DatabaseManager implements AutoCloseable {
                 if (sqlite) {
                     statement.execute(sql("PRAGMA journal_mode=WAL"));
                 }
+                String tableOptions = sqlite ? "" : " DEFAULT CHARSET=utf8mb4";
                 statement.execute(sql("CREATE TABLE IF NOT EXISTS ban_records ("
                         + "subject_uuid VARCHAR(36) PRIMARY KEY NOT NULL, name VARCHAR(64) NOT NULL,"
-                        + "reason TEXT NOT NULL, source VARCHAR(128) NOT NULL, expires_at BIGINT)"));
+                        + "reason TEXT NOT NULL, source VARCHAR(128) NOT NULL, expires_at BIGINT)" + tableOptions));
                 statement.execute(sql("CREATE TABLE IF NOT EXISTS mute_records ("
                         + "subject_uuid VARCHAR(36) PRIMARY KEY NOT NULL, name VARCHAR(64) NOT NULL,"
-                        + "reason TEXT NOT NULL, source VARCHAR(128) NOT NULL, expires_at BIGINT)"));
+                        + "reason TEXT NOT NULL, source VARCHAR(128) NOT NULL, expires_at BIGINT)" + tableOptions));
                 statement.execute(sql("CREATE TABLE IF NOT EXISTS punishment_history ("
                         + "id VARCHAR(64) NOT NULL PRIMARY KEY, subject_uuid VARCHAR(36) NOT NULL,"
                         + "punishment_type VARCHAR(24) NOT NULL, player VARCHAR(64) NOT NULL,"
                         + "reason TEXT NOT NULL, source VARCHAR(128) NOT NULL,"
-                        + "punished_at VARCHAR(40) NOT NULL, duration_seconds BIGINT)"));
+                        + "punished_at VARCHAR(40) NOT NULL, duration_seconds BIGINT)" + tableOptions));
                 statement.execute(sql("CREATE TABLE IF NOT EXISTS player_names ("
                         + "normalized_name VARCHAR(64) NOT NULL PRIMARY KEY, player_uuid VARCHAR(36) NOT NULL,"
-                        + "name VARCHAR(64) NOT NULL, last_seen BIGINT NOT NULL)"));
+                        + "name VARCHAR(64) NOT NULL, last_seen BIGINT NOT NULL)" + tableOptions));
                 ensureIndex(connection, "punishment_history", "idx_history_subject_date_id", "subject_uuid, punished_at, id");
                 String nameColumn = sqlite ? "name COLLATE NOCASE" : "name";
                 ensureIndex(connection, "ban_records", "idx_ban_records_name", nameColumn);
@@ -132,7 +133,8 @@ public final class DatabaseManager implements AutoCloseable {
         try {
             if (sqlite) {
                 try (Statement statement = connection.createStatement()) {
-                    statement.execute(sql("PRAGMA busy_timeout=5000"));
+                    statement.execute("PRAGMA busy_timeout=5000");
+                    statement.execute("PRAGMA synchronous=FULL");
                 }
             } else {
                 connection.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
@@ -144,45 +146,49 @@ public final class DatabaseManager implements AutoCloseable {
         }
     }
 
-    public synchronized <T> T execute(SqlOperation<T> operation) throws SQLException {
+    public <T> T execute(SqlOperation<T> operation) throws SQLException {
+        return execute(operation, true);
+    }
+
+    private synchronized <T> T execute(SqlOperation<T> operation, boolean rollbackPending) throws SQLException {
         if (closed) throw new SQLException("O banco de dados já foi fechado.");
-        if (sqlite) {
-            try (Connection connection = connect()) {
-                return operation.execute(connection);
-            }
-        }
-        if (!isMysqlConnectionUsable()) {
-            closeMysqlConnection();
-            mysqlConnection = connect();
+        if (!isConnectionUsable()) {
+            closeConnection();
+            sharedConnection = connect();
         }
         try {
-            return operation.execute(mysqlConnection);
+            return operation.execute(sharedConnection);
         } catch (SQLException | RuntimeException | Error error) {
-            closeMysqlConnection();
+            closeConnection();
             throw error;
         } finally {
-            if (mysqlConnection != null) {
+            if (sharedConnection != null) {
                 try {
-                    if (!mysqlConnection.getAutoCommit()) {
-                        mysqlConnection.rollback();
-                        mysqlConnection.setAutoCommit(true);
+                    if (!sharedConnection.getAutoCommit()) {
+                        if (rollbackPending) sharedConnection.rollback();
+                        sharedConnection.setAutoCommit(true);
                     }
                 } catch (SQLException error) {
-                    closeMysqlConnection();
-                    plugin.getLogger().warning("Conexão MySQL descartada ao restaurar a transação: "
+                    closeConnection();
+                    plugin.getLogger().warning("Conexão SQL descartada ao restaurar a transação: "
                             + error.getMessage());
                 }
-                if (mysqlConnection != null) mysqlLastUsedNanos = nanoTime.getAsLong();
+                if (sharedConnection != null) lastUsedNanos = nanoTime.getAsLong();
             }
         }
     }
 
     public <T> T transaction(SqlOperation<T> operation) throws SQLException {
+        return transaction(operation, result -> true);
+    }
+
+    <T> T transaction(SqlOperation<T> operation, java.util.function.Predicate<T> shouldCommit) throws SQLException {
         return execute(connection -> {
             connection.setAutoCommit(false);
             try {
                 T result = operation.execute(connection);
-                connection.commit();
+                if (shouldCommit.test(result)) connection.commit();
+                else connection.rollback();
                 return result;
             } catch (SQLException | RuntimeException | Error error) {
                 try {
@@ -192,7 +198,7 @@ public final class DatabaseManager implements AutoCloseable {
                 }
                 throw error;
             }
-        });
+        }, false);
     }
 
     static boolean isDuplicateKey(SQLException error) {
@@ -206,31 +212,31 @@ public final class DatabaseManager implements AutoCloseable {
 
     boolean isSqlite() { return sqlite; }
 
-    private boolean isMysqlConnectionUsable() {
+    private boolean isConnectionUsable() {
         try {
-            if (mysqlConnection == null || mysqlConnection.isClosed()) return false;
-            return nanoTime.getAsLong() - mysqlLastUsedNanos < MYSQL_VALIDATION_IDLE_NANOS
-                    || mysqlConnection.isValid(2);
+            if (sharedConnection == null || sharedConnection.isClosed()) return false;
+            return sqlite || nanoTime.getAsLong() - lastUsedNanos < MYSQL_VALIDATION_IDLE_NANOS
+                    || sharedConnection.isValid(2);
         } catch (SQLException error) {
             return false;
         }
     }
 
-    private void closeMysqlConnection() {
-        if (mysqlConnection == null) return;
+    private void closeConnection() {
+        if (sharedConnection == null) return;
         try {
-            mysqlConnection.close();
+            sharedConnection.close();
         } catch (SQLException error) {
-            plugin.getLogger().warning("Não foi possível fechar a conexão MySQL: " + error.getMessage());
+            plugin.getLogger().warning("Não foi possível fechar a conexão SQL: " + error.getMessage());
         } finally {
-            mysqlConnection = null;
+            sharedConnection = null;
         }
     }
 
     @Override
     public synchronized void close() {
         closed = true;
-        closeMysqlConnection();
+        closeConnection();
     }
 
     private void loadDriver(String className) throws SQLException {

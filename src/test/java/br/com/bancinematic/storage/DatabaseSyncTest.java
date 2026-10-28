@@ -3,6 +3,7 @@ package br.com.bancinematic.storage;
 import br.com.bancinematic.BanCinematicPlugin;
 import br.com.bancinematic.cinematic.BanCinematic;
 import br.com.bancinematic.punishment.PunishmentData;
+import br.com.bancinematic.punishment.ActivePunishments;
 import br.com.bancinematic.util.MessageUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.Server;
@@ -76,8 +77,8 @@ class DatabaseSyncTest {
         when(remote.isOnline()).thenReturn(true);
         when(local.isOnline()).thenReturn(true);
         when(clean.isOnline()).thenReturn(true);
-        when(bans.find(any())).thenReturn(java.util.Map.of(remoteId, new PunishmentData(remoteId, "Remoto", "regra", "OutroServidor", null),
-                localId, new PunishmentData(localId, "Local", "regra", "CONSOLE", null)));
+        when(bans.getActivePunishments(anyCollection())).thenReturn(java.util.Map.of(remoteId, new ActivePunishments(new PunishmentData(remoteId, "Remoto", "regra", "OutroServidor", null), null),
+                localId, new ActivePunishments(new PunishmentData(localId, "Local", "regra", "CONSOLE", null), null)));
 
         when(cinematic.isRunning(localId)).thenReturn(true);
         try (var bukkit = mockStatic(Bukkit.class)) {
@@ -88,39 +89,45 @@ class DatabaseSyncTest {
         verify(local, never()).kick(any(net.kyori.adventure.text.Component.class));
         verify(clean, never()).kick(any(net.kyori.adventure.text.Component.class));
         verify(plugin, never()).broadcastPunishment(anyString(), anyString(), anyString(), anyString(), anyString());
-        verify(mutes).find(any());
+        verify(mutes, never()).getActivePunishments(anyCollection());
     }
 
     @Test
     void failedBanQueryDoesNotPublishPartialSynchronization() {
-        when(bans.find(any())).thenThrow(new IllegalStateException("offline"));
+        when(bans.getActivePunishments(anyCollection())).thenThrow(new IllegalStateException("offline"));
         try (var bukkit = mockStatic(Bukkit.class)) {
             bukkit.when(Bukkit::getOnlinePlayers).thenReturn(List.of());
             sync.run();
         }
         verify(mutes).revision();
-        verify(mutes, never()).find(any());
+        verify(mutes, never()).getActivePunishments(anyCollection());
         verify(plugin, never()).runSync(any());
     }
 
-    @Test
-    void newerLocalWriteMakesDelayedSynchronizationResultsObsolete() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void newerLocalWriteInvalidatesOnlyItsOwnKind(boolean banChanged) {
         Player player = mock(Player.class);
         UUID id = UUID.randomUUID();
         when(player.getUniqueId()).thenReturn(id);
         when(player.isOnline()).thenReturn(true);
-        when(bans.find(any())).thenReturn(java.util.Map.of(id, new PunishmentData(id, "Alvo", "old", "A", null)));
+        when(bans.getActivePunishments(anyCollection())).thenReturn(java.util.Map.of(id, new ActivePunishments(new PunishmentData(id, "Alvo", "old", "A", null), null)));
         var callback = new java.util.concurrent.atomic.AtomicReference<Runnable>();
         doAnswer(call -> { callback.set(call.getArgument(0)); return null; }).when(plugin).runSync(any());
         try (var bukkit = mockStatic(Bukkit.class)) {
             bukkit.when(Bukkit::getOnlinePlayers).thenReturn(List.of(player));
             sync.run();
         }
-        when(bans.revision()).thenReturn(1L);
-        when(mutes.revision()).thenReturn(1L);
+        if (banChanged) when(bans.revision()).thenReturn(1L);
+        else when(mutes.revision()).thenReturn(1L);
         callback.get().run();
-        verify(player, never()).kick(any(net.kyori.adventure.text.Component.class));
-        verifyNoInteractions(muteManager);
+        if (banChanged) {
+            verify(player, never()).kick(any(net.kyori.adventure.text.Component.class));
+            verify(muteManager).updateOnlineFromSync(id, null, 0L);
+        } else {
+            verify(player).kick(any(net.kyori.adventure.text.Component.class));
+            verifyNoInteractions(muteManager);
+        }
     }
 
     @Test
@@ -141,8 +148,8 @@ class DatabaseSyncTest {
                 release.countDown();
             }
             executor.execute(() -> {}).get(5, TimeUnit.SECONDS);
-            verify(bans).find(any());
-            verify(mutes).find(any());
+            verify(bans).getActivePunishments(anyCollection());
+            verify(mutes, never()).getActivePunishments(anyCollection());
         }
     }
 }

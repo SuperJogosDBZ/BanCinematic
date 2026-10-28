@@ -93,7 +93,7 @@ class PlayerLookupTest {
         when(player.isOnline()).thenReturn(true);
         var event = mock(PlayerJoinEvent.class);
         when(event.getPlayer()).thenReturn(player);
-        when(mutes.loadForJoin(id)).thenReturn(CompletableFuture.completedFuture(new JoinPunishments(
+        when(mutes.loadForJoin(id)).thenReturn(CompletableFuture.completedFuture(new ActivePunishments(
                 new PunishmentData(id, "Alvo", "ban", "A", null), new PunishmentData(id, "Alvo", "mute", "A", null))));
         new MuteJoinListener(plugin, mutes).onJoin(event);
         verify(player).kick(any(net.kyori.adventure.text.Component.class));
@@ -105,7 +105,7 @@ class PlayerLookupTest {
     void leavingDuringCombinedLookupDoesNotSendLateReminderOrKick() {
         var plugin = plugin(DatabaseExecutor.inline());
         var mutes = mock(MuteManager.class);
-        var result = new CompletableFuture<JoinPunishments>();
+        var result = new CompletableFuture<ActivePunishments>();
         var player = mock(Player.class);
         UUID id = UUID.randomUUID();
         when(player.getUniqueId()).thenReturn(id);
@@ -119,7 +119,7 @@ class PlayerLookupTest {
         var quit = mock(PlayerQuitEvent.class);
         when(quit.getPlayer()).thenReturn(player);
         listener.onQuit(quit);
-        result.complete(new JoinPunishments(null, new PunishmentData(id, "Alvo", "reason", "A", null)));
+        result.complete(new ActivePunishments(null, new PunishmentData(id, "Alvo", "reason", "A", null)));
         verify(mutes).forgetOnline(id);
         verify(mutes, never()).getOnline(any());
         verify(mutes, never()).muteReminder(any());
@@ -167,11 +167,27 @@ class PlayerLookupTest {
                 }
                 return null;
             });
-            var bans = new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN);
-            assertEquals(204, bans.find(ids).size());
-            var selected = bans.find(List.of(ids.get(0), ids.get(202), UUID.randomUUID()));
-            assertEquals(Set.of(ids.get(0), ids.get(202)), selected.keySet());
-            assertTrue(bans.find(List.of()).isEmpty());
+            var mutes = new PunishmentStorage(plugin, database, PunishmentStorage.Kind.MUTE);
+            assertTrue(mutes.put(new PunishmentData(ids.get(100), "Mutado", "mute", "A", null)));
+            var connections = new ArrayList<java.sql.Connection>();
+            var observed = spy(new DatabaseManager(plugin));
+            doAnswer(call -> {
+                var connection = spy(database.connect());
+                connections.add(connection);
+                return connection;
+            }).when(observed).connect();
+            var combined = new PunishmentStorage(plugin, observed, PunishmentStorage.Kind.BAN);
+            assertTrue(combined.getActivePunishments(List.<UUID>of()).isEmpty());
+            verify(observed, never()).connect();
+            var active = combined.getActivePunishments(ids);
+            assertEquals(204, active.size());
+            assertNotNull(active.get(ids.get(100)).ban());
+            assertEquals("mute", active.get(ids.get(100)).mute().reason());
+            assertNull(active.get(ids.get(0)).mute());
+            assertFalse(active.containsKey(ids.get(204)));
+            verify(connections.getFirst(), times(3)).prepareStatement(contains("UNION ALL"));
+            observed.close();
+
         }
     }
 
@@ -257,7 +273,7 @@ class PlayerLookupTest {
                 throw new IllegalStateException("offline");
             });
             var sender = mock(CommandSender.class);
-            new CheckCommand(plugin, mock(BanManager.class), mock(MuteManager.class))
+            new CheckCommand(plugin, mock(PunishmentStorage.class))
                     .onCommand(sender, mock(Command.class), "check", new String[]{"Alvo"});
             executor.execute(() -> {}).get(5, TimeUnit.SECONDS);
             verify(sender).sendMessage("STORAGE_ERROR");
@@ -272,18 +288,18 @@ class PlayerLookupTest {
         var storage = mock(PunishmentStorage.class);
         var manager = new MuteManager(plugin, storage, mock(PunishmentLogger.class), executor);
         UUID id = UUID.randomUUID();
-        var banned = new CompletableFuture<JoinPunishments>();
-        var stale = new CompletableFuture<JoinPunishments>();
-        when(executor.<JoinPunishments>submit(any())).thenReturn(banned, stale);
+        var banned = new CompletableFuture<ActivePunishments>();
+        var stale = new CompletableFuture<ActivePunishments>();
+        when(executor.<ActivePunishments>submit(any())).thenReturn(banned, stale);
         manager.loadForJoin(id);
         assertFalse(manager.isLoaded(id));
-        banned.complete(new JoinPunishments(new PunishmentData(id, "Alvo", "ban", "A", null), null));
+        banned.complete(new ActivePunishments(new PunishmentData(id, "Alvo", "ban", "A", null), null));
         assertFalse(manager.isLoaded(id), "Ban no join não pode liberar o chat antes do kick.");
         manager.forgetOnline(id);
         manager.loadForJoin(id);
         PunishmentData current = new PunishmentData(id, "Alvo", "new", "A", null);
         manager.updateOnline(id, current);
-        stale.complete(new JoinPunishments(null, null));
+        stale.complete(new ActivePunishments(null, null));
         assertTrue(manager.isLoaded(id));
         assertEquals(current, manager.getOnline(id));
     }
@@ -296,8 +312,8 @@ class PlayerLookupTest {
             var storage = mock(PunishmentStorage.class);
             var manager = new MuteManager(plugin, storage, mock(PunishmentLogger.class), executor);
             UUID id = UUID.randomUUID();
-            when(storage.getForJoin(id)).thenAnswer(call -> { started.countDown(); await(first); return new JoinPunishments(null, new PunishmentData(id, "Alvo", "old", "A", null)); })
-                    .thenAnswer(call -> { await(second); return new JoinPunishments(null, null); });
+            when(storage.getActivePunishments(id)).thenAnswer(call -> { started.countDown(); await(first); return new ActivePunishments(null, new PunishmentData(id, "Alvo", "old", "A", null)); })
+                    .thenAnswer(call -> { await(second); return new ActivePunishments(null, null); });
             var old = manager.loadForJoin(id);
             assertTrue(started.await(5, TimeUnit.SECONDS));
             manager.forgetOnline(id);
@@ -368,6 +384,33 @@ class PlayerLookupTest {
             assertEquals(List.of(), bans.suggestNames("%"));
             assertEquals(List.of(), bans.suggestNames("_"));
             assertEquals(List.of(), bans.suggestNames(UUID.randomUUID().toString()));
+        }
+    }
+
+    @Test
+    void sqliteSuggestionsApplyCaseInsensitiveOrderBeforeTheLimitForBothKinds() throws Exception {
+        var plugin = plugin(DatabaseExecutor.inline());
+        try (var database = new DatabaseManager(plugin)) {
+            database.initialize();
+            for (var kind : PunishmentStorage.Kind.values()) {
+                var storage = new PunishmentStorage(plugin, database, kind);
+                String table = kind == PunishmentStorage.Kind.BAN ? "ban_records" : "mute_records";
+                database.transaction(connection -> {
+                    try (var statement = connection.prepareStatement("INSERT INTO " + table + " VALUES (?, ?, 'r', 'A', NULL)")) {
+                        for (int i = 0; i < 130; i++) {
+                            statement.setString(1, UUID.randomUUID().toString());
+                            statement.setString(2, (i < 65 ? "alice" : "Zed") + i);
+                            statement.addBatch();
+                        }
+                        statement.executeBatch();
+                    }
+                    return null;
+                });
+                var suggestions = storage.suggestNames("");
+                assertEquals(100, suggestions.size());
+                assertEquals(65, suggestions.stream().filter(name -> name.startsWith("alice")).count());
+                assertEquals(65, storage.suggestNames("ALICE").size());
+            }
         }
     }
 

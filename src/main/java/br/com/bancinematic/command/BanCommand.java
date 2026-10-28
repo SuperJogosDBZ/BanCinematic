@@ -44,11 +44,13 @@ public final class BanCommand implements CommandExecutor, TabCompleter {
             return true;
         }
 
-        String name = args[0];
+        String input = args[0];
         String reason = CommandUtil.joinReason(args, 1);
         if (!CommandUtil.validateReasonLength(plugin, sender, reason)) return true;
 
-        CommandUtil.resolveKnownPlayer(plugin, sender, name, uuid -> {
+        CommandUtil.resolveKnownPlayer(plugin, sender, input, identity -> {
+            var uuid = identity.uuid();
+            String name = identity.name();
             Player target = Bukkit.getPlayer(uuid);
     
             if (target != null && cinematic.isRunning(target.getUniqueId())) {

@@ -2,7 +2,7 @@ package br.com.bancinematic.storage;
 
 import br.com.bancinematic.BanCinematicPlugin;
 import br.com.bancinematic.punishment.PunishmentData;
-import br.com.bancinematic.punishment.JoinPunishments;
+import br.com.bancinematic.punishment.ActivePunishments;
 import br.com.bancinematic.punishment.PunishmentResult;
 import br.com.bancinematic.punishment.PunishmentType;
 import java.sql.Connection;
@@ -35,67 +35,64 @@ public final class PunishmentStorage {
 
     public PunishmentData get(UUID uuid) {
         if (uuid == null) return null;
-        return find(java.util.List.of(uuid)).get(uuid);
-    }
-    public JoinPunishments getForJoin(UUID uuid) {
-        java.util.Objects.requireNonNull(uuid);
         try {
             return database.execute(connection -> {
                 try (PreparedStatement statement = connection.prepareStatement(database.sql(
-                        "SELECT 'BAN' AS kind, name, reason, source, expires_at FROM ban_records"
-                                + " WHERE subject_uuid = ? AND (expires_at IS NULL OR expires_at > ?)"
-                                + " UNION ALL SELECT 'MUTE' AS kind, name, reason, source, expires_at FROM mute_records"
+                        "SELECT name, reason, source, expires_at FROM " + kind.table
                                 + " WHERE subject_uuid = ? AND (expires_at IS NULL OR expires_at > ?)"))) {
-                    long now = Instant.now().toEpochMilli();
                     statement.setString(1, uuid.toString());
-                    statement.setLong(2, now);
-                    statement.setString(3, uuid.toString());
-                    statement.setLong(4, now);
-                    PunishmentData ban = null;
-                    PunishmentData mute = null;
+                    statement.setLong(2, Instant.now().toEpochMilli());
                     try (ResultSet result = statement.executeQuery()) {
-                        while (result.next()) {
-                            long expiry = result.getLong("expires_at");
-                            Instant expires = result.wasNull() ? null : Instant.ofEpochMilli(expiry);
-                            PunishmentData data = new PunishmentData(uuid, result.getString("name"), result.getString("reason"),
-                                    result.getString("source"), expires);
-                            if ("BAN".equals(result.getString("kind"))) {
-                                ban = data;
-                            } else {
-                                mute = data;
-                            }
-                        }
+                        if (!result.next()) return null;
+                        long expiry = result.getLong("expires_at");
+                        Instant expires = result.wasNull() ? null : Instant.ofEpochMilli(expiry);
+                        return new PunishmentData(uuid, result.getString("name"), result.getString("reason"),
+                                result.getString("source"), expires);
                     }
-                    return new JoinPunishments(ban, mute);
                 }
             });
         } catch (SQLException error) {
-            throw new IllegalStateException("Não foi possível consultar as punições na entrada.", error);
+            throw new IllegalStateException("Não foi possível consultar " + kind.table + ".", error);
         }
     }
-    public Map<UUID, PunishmentData> find(java.util.Collection<UUID> ids) {
+    public ActivePunishments getActivePunishments(UUID uuid) {
+        java.util.Objects.requireNonNull(uuid);
+        return getActivePunishments(java.util.List.of(uuid)).getOrDefault(uuid, new ActivePunishments(null, null));
+    }
+
+    public Map<UUID, ActivePunishments> getActivePunishments(java.util.Collection<UUID> ids) {
         if (ids.isEmpty()) return Map.of();
         var keys = java.util.List.copyOf(ids);
         try {
             return database.execute(connection -> {
-                Map<UUID, PunishmentData> found = new java.util.HashMap<>();
+                Map<UUID, ActivePunishments> found = new java.util.HashMap<>();
                 for (int offset = 0; offset < keys.size(); offset += 100) {
                     var batch = keys.subList(offset, Math.min(keys.size(), offset + 100));
                     String placeholders = String.join(",", java.util.Collections.nCopies(batch.size(), "?"));
                     try (PreparedStatement statement = connection.prepareStatement(database.sql(
-                            "SELECT subject_uuid, name, reason, source, expires_at FROM " + kind.table
-                                    + " WHERE subject_uuid IN (" + placeholders + ")"
-                                    + " AND (expires_at IS NULL OR expires_at > ?)"))) {
+                            "SELECT 'BAN' AS kind, subject_uuid, name, reason, source, expires_at FROM ban_records"
+                                    + " WHERE subject_uuid IN (" + placeholders + ") AND (expires_at IS NULL OR expires_at > ?)"
+                                    + " UNION ALL SELECT 'MUTE' AS kind, subject_uuid, name, reason, source, expires_at FROM mute_records"
+                                    + " WHERE subject_uuid IN (" + placeholders + ") AND (expires_at IS NULL OR expires_at > ?)"))) {
+                        long now = Instant.now().toEpochMilli();
                         int index = 1;
-                        for (UUID id : batch) statement.setString(index++, id.toString());
-                        statement.setLong(index, Instant.now().toEpochMilli());
+                        for (int i = 0; i < 2; i++) {
+                            for (UUID id : batch) statement.setString(index++, id.toString());
+                            statement.setLong(index++, now);
+                        }
                         try (ResultSet result = statement.executeQuery()) {
                             while (result.next()) {
                                 UUID id = UUID.fromString(result.getString("subject_uuid"));
                                 long expiry = result.getLong("expires_at");
                                 Instant expires = result.wasNull() ? null : Instant.ofEpochMilli(expiry);
-                                found.put(id, new PunishmentData(id, result.getString("name"), result.getString("reason"),
-                                        result.getString("source"), expires));
+                                PunishmentData data = new PunishmentData(id, result.getString("name"), result.getString("reason"),
+                                        result.getString("source"), expires);
+                                ActivePunishments previous = found.get(id);
+                                if ("BAN".equals(result.getString("kind"))) {
+                                    found.put(id, new ActivePunishments(data, previous == null ? null : previous.mute()));
+                                } else {
+                                    found.put(id, new ActivePunishments(previous == null ? null : previous.ban(), data));
+                                }
                             }
                         }
                     }
@@ -103,7 +100,7 @@ public final class PunishmentStorage {
                 return found;
             });
         } catch (SQLException error) {
-            throw new IllegalStateException("Não foi possível consultar " + kind.table + ".", error);
+            throw new IllegalStateException("Não foi possível consultar as punições ativas.", error);
         }
     }
 
@@ -115,7 +112,8 @@ public final class PunishmentStorage {
                 var names = new java.util.ArrayList<String>();
                 try (PreparedStatement statement = connection.prepareStatement(database.sql(
                         "SELECT DISTINCT name FROM " + kind.table + " WHERE name LIKE ? ESCAPE '!'"
-                                + " AND (expires_at IS NULL OR expires_at > ?) ORDER BY name LIMIT 100"))) {
+                                + " AND (expires_at IS NULL OR expires_at > ?) ORDER BY "
+                                + (database.isSqlite() ? "name COLLATE NOCASE" : "name") + " LIMIT 100"))) {
                     statement.setString(1, escaped + "%");
                     statement.setLong(2, Instant.now().toEpochMilli());
                     try (ResultSet result = statement.executeQuery()) {
@@ -130,11 +128,11 @@ public final class PunishmentStorage {
         }
     }
 
-    public synchronized boolean put(PunishmentData data) {
+    public boolean put(PunishmentData data) {
         return save(data, null, null, null) == PunishmentResult.SUCCESS;
     }
 
-    public synchronized PunishmentResult putAndLog(PunishmentData data, PunishmentType type, Long durationSeconds,
+    public PunishmentResult putAndLog(PunishmentData data, PunishmentType type, Long durationSeconds,
                                                     PunishmentLogger history) {
         return save(data, type, durationSeconds, history);
     }
@@ -152,12 +150,11 @@ public final class PunishmentStorage {
                     insert(connection, data);
                 } catch (SQLException error) {
                     if (!DatabaseManager.isDuplicateKey(error)) throw error;
-                    connection.rollback();
                     return PunishmentResult.ALREADY_ACTIVE;
                 }
                 if (history != null) history.log(connection, type, data.uniqueId(), data.name(), data.reason(), data.source(), durationSeconds);
                 return PunishmentResult.SUCCESS;
-            });
+            }, outcome -> outcome == PunishmentResult.SUCCESS);
             if (result == PunishmentResult.SUCCESS) {
                 revision++;
                 if (history != null) history.logConsole(type, data.uniqueId(), data.name(), data.reason(), data.source(), durationSeconds);
@@ -169,7 +166,7 @@ public final class PunishmentStorage {
         }
     }
 
-    public synchronized PunishmentResult removeAndLog(UUID uuid, String player, String reason, String source,
+    public PunishmentResult removeAndLog(UUID uuid, String player, String reason, String source,
                                                        PunishmentType type, PunishmentLogger history) {
         if (uuid == null) return PunishmentResult.NOT_ACTIVE;
         try {
@@ -183,8 +180,10 @@ public final class PunishmentStorage {
                 history.log(connection, type, uuid, player, reason, source, null);
                 return PunishmentResult.SUCCESS;
             });
-            revision++;
-            if (result == PunishmentResult.SUCCESS) history.logConsole(type, uuid, player, reason, source, null);
+            if (result == PunishmentResult.SUCCESS) {
+                revision++;
+                history.logConsole(type, uuid, player, reason, source, null);
+            }
             return result;
         } catch (SQLException error) {
             plugin.getLogger().severe("Não foi possível remover punição de " + kind.table + " e salvar histórico: " + error.getMessage());
@@ -192,7 +191,7 @@ public final class PunishmentStorage {
         }
     }
 
-    public synchronized void cleanupExpired() {
+    public void cleanupExpired() {
         try {
             database.execute(connection -> {
                 try (PreparedStatement statement = connection.prepareStatement(database.sql(

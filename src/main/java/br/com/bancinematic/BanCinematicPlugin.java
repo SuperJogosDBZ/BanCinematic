@@ -87,13 +87,13 @@ public final class BanCinematicPlugin extends JavaPlugin {
         register("unmute", new UnmuteCommand(this, muteManager));
         register("kick", new KickCommand(this, punishmentLogger));
         register("history", new HistoryCommand(this, punishmentLogger));
-        register("check", new CheckCommand(this, banManager, muteManager));
+        register("check", new CheckCommand(this, muteStorage));
         getServer().getPluginManager().registerEvents(new PunishmentTabListener(this, banManager, muteManager), this);
 
         getServer().getScheduler().runTaskTimer(this, () -> {
             databaseExecutor.execute(muteStorage::cleanupExpired);
             databaseExecutor.execute(banStorage::cleanupExpired);
-        }, 20L * 60L, 20L * 60L);
+        }, 20L * 60L * 30L, 20L * 60L * 30L);
 
         new DatabaseSync(this, banStorage, muteStorage, muteManager, cinematic).start();
 

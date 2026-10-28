@@ -41,10 +41,10 @@ public final class MuteManager {
         return mute != null && !mute.expired() ? mute : null;
     }
 
-    public CompletableFuture<JoinPunishments> loadForJoin(UUID uuid) {
+    public CompletableFuture<ActivePunishments> loadForJoin(UUID uuid) {
         OnlineMute loading = new OnlineMute(false, null);
         online.put(uuid, loading);
-        return executor.submit(() -> storage.getForJoin(uuid)).thenApply(data -> {
+        return executor.submit(() -> storage.getActivePunishments(uuid)).thenApply(data -> {
             if (data.ban() == null) {
                 online.computeIfPresent(uuid, (id, current) -> current == loading ? new OnlineMute(true, data.mute()) : current);
             }

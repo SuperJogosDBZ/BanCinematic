@@ -37,11 +37,13 @@ public final class MuteCommand implements CommandExecutor {
             return true;
         }
 
-        String name = args[0];
+        String input = args[0];
         String reason = CommandUtil.joinReason(args, 1);
         if (!CommandUtil.validateReasonLength(plugin, sender, reason)) return true;
 
-        CommandUtil.resolveKnownPlayer(plugin, sender, name, uuid -> {
+        CommandUtil.resolveKnownPlayer(plugin, sender, input, identity -> {
+            var uuid = identity.uuid();
+            String name = identity.name();
             String sourceName = ExecutorName.from(sender);
             manager.mute(uuid, name, reason, sourceName).thenAccept(result -> plugin.runSync(() -> {
                 if (result == PunishmentResult.ALREADY_ACTIVE) {

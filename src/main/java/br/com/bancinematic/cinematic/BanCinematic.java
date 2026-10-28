@@ -256,6 +256,13 @@ public final class BanCinematic implements Listener {
     }
 
     private void tick(CinematicSession session, Player target) {
+        if (session.hasTimedOut()) {
+            if (beginFinish(session)) {
+                cleanup(session);
+                punishAndKick(session.source(), session.sourceName(), target, session.reason(), session.duration());
+            }
+            return;
+        }
         session.tick(session.tick() + 1);
         session.phaseTicks(session.phaseTicks() + 1);
 
@@ -263,11 +270,6 @@ public final class BanCinematic implements Listener {
         Entity monster = session.monster();
         boolean sounds = settings.sounds();
         boolean alive = monster != null && monster.isValid();
-
-        int maxTicks = (int) Math.max(
-                100L,
-                Math.min(Integer.MAX_VALUE, settings.maxSeconds() * 20L)
-        );
 
         holdPlayer(session, target, alive ? monster : null);
 
@@ -326,8 +328,7 @@ public final class BanCinematic implements Listener {
             }
 
             case WALKING -> {
-                if (!alive
-                        || session.tick() >= maxTicks) {
+                if (!alive) {
                     startWindup(session, target);
                 } else if (step(session, monster, target)) {
                     startWindup(session, target);
@@ -451,7 +452,7 @@ public final class BanCinematic implements Listener {
         if (Math.abs(difference) < 0.15) return target;
 
         double step = Math.copySign(
-                Math.min(Math.abs(difference) * 0.18, maxStep),
+                Math.min(Math.abs(difference) * 0.12, maxStep),
                 difference
         );
         return (float) (current + step);
@@ -504,19 +505,14 @@ public final class BanCinematic implements Listener {
         double remaining = distance - reach;
         double maxSpeed = settings.monsterApproachSpeed();
         double acceleration = 0.4 + 0.6 * Math.min(1.0, session.phaseTicks() / 12.0);
-        double slowdown = 0.35 + 0.65 * Math.min(1.0, remaining / 1.8);
+        double approach = Math.min(1.0, remaining / 3.0);
+        double slowdown = 0.35 + 0.65 * approach * approach * (3.0 - 2.0 * approach);
         double speed = Math.min(remaining, maxSpeed * acceleration * slowdown);
 
         Location next = ground(from.clone().add(
                 toPlayer.normalize().multiply(speed)));
 
-        lookAt(next, target.getEyeLocation());
-        next.setPitch(0);
-        monster.teleport(next);
-
-        if (monster instanceof LivingEntity living) {
-            living.setBodyYaw(next.getYaw());
-        }
+        face(monster, target, next);
 
         return false;
     }
@@ -561,6 +557,10 @@ public final class BanCinematic implements Listener {
                     1.1f,
                     1.0f
             );
+        }
+
+        if (session.settings().lightningOnHit() && impactWorld != null) {
+            impactWorld.strikeLightningEffect(impactLocation);
         }
 
         target.playHurtAnimation(0f);
@@ -634,7 +634,8 @@ public final class BanCinematic implements Listener {
 
             @Override
             public void run() {
-                if (!monster.isValid()) {
+                if (!monster.isValid() || session.hasTimedOut()) {
+                    if (monster.isValid()) monster.remove();
                     activeMonsters.remove(monster.getUniqueId());
                     cancel();
                     return;
@@ -646,13 +647,8 @@ public final class BanCinematic implements Listener {
                 if (particles) {
                     int count = 6 + (int) Math.round(progress * 14);
                     world.spawnParticle(
-                            Particle.SCULK_SOUL, center, count,
+                            settings.dissolveParticle(), center, count,
                             0.9, 1.1, 0.9, 0.025
-                    );
-                    world.spawnParticle(
-                            Particle.REVERSE_PORTAL, center,
-                            4 + (int) Math.round(progress * 8),
-                            0.7, 0.9, 0.7, 0.02
                     );
                 }
 
@@ -910,15 +906,18 @@ public final class BanCinematic implements Listener {
     }
 
     private void face(Entity entity, Player target) {
-        Location from = entity.getLocation();
-        Location aim = target.getEyeLocation();
+        face(entity, target, entity.getLocation());
+    }
 
-        lookAt(from, aim);
-
-        entity.teleport(from);
-
+    private void face(Entity entity, Player target, Location position) {
+        double eyeHeight = entity instanceof LivingEntity living ? living.getEyeHeight() : 0;
+        Location eye = position.clone().add(0, eyeHeight, 0);
+        lookAt(eye, target.getEyeLocation());
+        position.setYaw(smoothAngle(position.getYaw(), eye.getYaw(), 6.5));
+        position.setPitch(smoothLinear(position.getPitch(), eye.getPitch(), 3.5));
+        entity.teleport(position);
         if (entity instanceof LivingEntity living) {
-            living.setBodyYaw(from.getYaw());
+            living.setBodyYaw(position.getYaw());
         }
     }
 

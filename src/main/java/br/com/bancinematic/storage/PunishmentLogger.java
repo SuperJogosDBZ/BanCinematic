@@ -77,7 +77,7 @@ public final class PunishmentLogger {
         if (limit < 1) throw new IllegalArgumentException("O tamanho da página deve ser positivo.");
 
         String countSql = "SELECT COUNT(*) FROM punishment_history WHERE subject_uuid = ?";
-        String pageSql = "SELECT id, subject_uuid, punishment_type, player, reason, source, punished_at, duration_seconds"
+        String pageSql = "SELECT id, punishment_type, player, reason, source, punished_at, duration_seconds"
                 + " FROM punishment_history WHERE subject_uuid = ?"
                 + " ORDER BY punished_at DESC, id DESC LIMIT ? OFFSET ?";
         List<HistoryEntry> entries = new ArrayList<>();
@@ -97,11 +97,9 @@ public final class PunishmentLogger {
                     statement.setLong(3, offset);
                     try (ResultSet result = statement.executeQuery()) {
                         while (result.next()) {
-                            UUID uuid = parseUuid(result.getString("subject_uuid"));
-                            if (uuid == null) continue;
                             entries.add(new HistoryEntry(
                                     result.getString("id"),
-                                    uuid,
+                                    playerId,
                                     result.getString("punishment_type"),
                                     result.getString("player"),
                                     result.getString("reason"),
@@ -122,14 +120,6 @@ public final class PunishmentLogger {
     private static Long nullableLong(ResultSet result, String column) throws SQLException {
         long value = result.getLong(column);
         return result.wasNull() ? null : value;
-    }
-
-    private static UUID parseUuid(String value) {
-        try {
-            return value == null ? null : UUID.fromString(value);
-        } catch (IllegalArgumentException ignored) {
-            return null;
-        }
     }
 
     public record HistoryPage(long totalEntries, List<HistoryEntry> entries) {

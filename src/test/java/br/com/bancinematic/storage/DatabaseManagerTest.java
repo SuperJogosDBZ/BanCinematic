@@ -61,7 +61,7 @@ class DatabaseManagerTest {
     }
 
     @Test
-    void sqliteKeepsWalAndFullSynchronousOnNewOperationConnections() throws Exception {
+    void sqliteKeepsWalFullSynchronousAndBusyTimeoutAfterReopening() throws Exception {
         config.set("database.type", "SQLITE");
         try (DatabaseManager database = new DatabaseManager(plugin)) {
             database.initialize();
@@ -77,14 +77,51 @@ class DatabaseManagerTest {
                             assertEquals(2, result.getInt(1), "Conexões de operação devem manter FULL.");
                         }
                     }
+                    try (var statement = connection.createStatement(); var result = statement.executeQuery("PRAGMA busy_timeout")) {
+                        assertTrue(result.next());
+                        assertEquals(5000, result.getInt(1));
+                    }
                     return null;
                 });
+                if (i == 0) assertThrows(SQLException.class, () -> database.execute(c -> { throw new SQLException("forced reopen"); }));
             }
         }
     }
 
     @Test
-    void mysqlReusesConnectionAndClosesOnlyAtShutdown() throws Exception {
+    void sqliteReusesConnectionAndRollsBackFailedWritesWithoutReplay() throws Exception {
+        config.set("database.type", "SQLITE");
+        try (DatabaseManager database = spy(new DatabaseManager(plugin))) {
+            database.initialize();
+            Connection first = database.execute(c -> c);
+            assertSame(first, database.execute(c -> c));
+            verify(database).connect();
+            assertFalse(first.isClosed());
+            assertThrows(SQLException.class, () -> database.transaction(c -> {
+                try (var statement = c.createStatement()) {
+                    statement.executeUpdate("INSERT INTO player_names VALUES ('alvo', 'id', 'Alvo', 1)");
+                }
+                throw new SQLException("failed transaction");
+            }));
+            assertTrue(first.isClosed());
+            Connection second = database.execute(c -> c);
+            assertNotSame(first, second);
+            assertTrue(second.getAutoCommit());
+            assertEquals(0, database.execute(c -> {
+                try (var statement = c.createStatement(); var result = statement.executeQuery("SELECT COUNT(*) FROM player_names")) {
+                    result.next(); return result.getInt(1);
+                }
+            }).intValue());
+            verify(database, times(2)).connect();
+            second.close();
+            assertNotSame(second, database.execute(c -> c));
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void bothBackendsReuseConnectionAndCloseOnlyAtShutdown(boolean useSqlite) throws Exception {
+        if (useSqlite) config.set("database.type", "SQLITE");
         DatabaseManager database = spy(new DatabaseManager(plugin));
         Connection connection = healthyConnection();
         doReturn(connection).when(database).connect();
@@ -177,6 +214,56 @@ class DatabaseManagerTest {
     }
 
     @Test
+    void completedTransactionDoesNotRollbackAndFailedTransactionRollsBackOnce() throws Exception {
+        DatabaseManager database = spy(new DatabaseManager(plugin));
+        Connection connection = healthyConnection();
+        var autoCommit = new java.util.concurrent.atomic.AtomicBoolean(true);
+        when(connection.getAutoCommit()).thenAnswer(call -> autoCommit.get());
+        doAnswer(call -> { autoCommit.set(call.getArgument(0)); return null; })
+                .when(connection).setAutoCommit(anyBoolean());
+        doReturn(connection).when(database).connect();
+        try (database) {
+            assertEquals("saved", database.transaction(c -> "saved"));
+            verify(connection).commit();
+            verify(connection, never()).rollback();
+            assertTrue(autoCommit.get());
+            assertThrows(SQLException.class, () -> database.transaction(c -> { throw new SQLException("failed"); }));
+            verify(connection).rollback();
+            verify(connection).commit();
+            verify(connection).close();
+        }
+    }
+
+    @Test
+    void duplicatePunishmentRollsBackWithoutCommittingOrDiscardingConnection() throws Exception {
+        DatabaseManager database = spy(new DatabaseManager(plugin));
+        Connection connection = healthyConnection();
+        var autoCommit = new java.util.concurrent.atomic.AtomicBoolean(true);
+        when(connection.getAutoCommit()).thenAnswer(call -> autoCommit.get());
+        doAnswer(call -> { autoCommit.set(call.getArgument(0)); return null; })
+                .when(connection).setAutoCommit(anyBoolean());
+        var statement = mock(java.sql.PreparedStatement.class);
+        when(connection.prepareStatement(anyString())).thenReturn(statement);
+        when(statement.executeUpdate()).thenReturn(0).thenThrow(new SQLException("duplicate", "23000", 1062));
+        doReturn(connection).when(database).connect();
+        try (database) {
+            var storage = new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN);
+            var history = mock(PunishmentLogger.class);
+            assertEquals(br.com.bancinematic.punishment.PunishmentResult.ALREADY_ACTIVE,
+                    storage.putAndLog(new PunishmentData(UUID.randomUUID(), "Alvo", "reason", "A", null),
+                            PunishmentType.BAN, null, history));
+            verify(connection).rollback();
+            verify(connection, never()).commit();
+            verify(connection, never()).close();
+            assertTrue(autoCommit.get());
+            assertEquals(0, storage.revision());
+            verifyNoInteractions(history);
+            assertSame(connection, database.execute(c -> c));
+            verify(database).connect();
+        }
+    }
+
+    @Test
     void sharedConnectionKeepsPunishmentAndHistoryTransactionsIndependent() throws Exception {
         config.set("database.type", "SQLITE");
         DatabaseManager sqlite = new DatabaseManager(plugin);
@@ -203,5 +290,6 @@ class DatabaseManagerTest {
             verify(database).connect();
         }
         assertTrue(physical.isClosed());
+        sqlite.close();
     }
 }

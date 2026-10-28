@@ -40,14 +40,15 @@ public final class DatabaseSync implements Runnable {
         var ids = players.stream().map(org.bukkit.entity.Player::getUniqueId).toList();
         plugin.databaseExecutor().execute(() -> {
             long banRevision = bans.revision(), muteRevision = mutes.revision();
-            var onlineBans = bans.find(ids);
-            var onlineMutes = mutes.find(ids);
+            var active = bans.getActivePunishments(ids);
             plugin.runSync(() -> {
                 for (var player : players) {
                     if (!player.isOnline()) continue;
                     var uuid = player.getUniqueId();
-                    if (mutes.revision() == muteRevision) muteManager.updateOnlineFromSync(uuid, onlineMutes.get(uuid), muteRevision);
-                    var ban = onlineBans.get(uuid);
+                    var punishments = active.get(uuid);
+                    if (mutes.revision() == muteRevision) muteManager.updateOnlineFromSync(uuid,
+                            punishments == null ? null : punishments.mute(), muteRevision);
+                    var ban = punishments == null ? null : punishments.ban();
                     if (ban == null || ban.expired() || bans.revision() != banRevision || cinematic.isRunning(uuid)) continue;
                     String text = plugin.messages().screen(ban.permanent() ? "messages.ban-screen" : "messages.tempban-screen",
                             ban.reason(), ban.source(), player.getName(), ban.permanent() ? ""

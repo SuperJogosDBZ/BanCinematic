@@ -25,15 +25,17 @@ cinematic:
   camera-turn-delay-ticks: 6
   camera-yaw-max-step: 6.5
   camera-pitch-max-step: 3.5
+  dissolve-particle: SCULK_SOUL
   dissolve-ticks: 30
   max-seconds: 15
   darkness: true
   monster:
     type: WARDEN
     scale: 3.0
-    distance: 9.0
+    distance: 11.0
     height-offset: 0.0
     approach-speed: 0.16
-    attack-distance: 2.5
+    attack-distance: 3.0
+  lightning-on-hit: true
   sounds: true
   particles: true

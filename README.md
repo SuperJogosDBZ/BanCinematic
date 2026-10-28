@@ -1,3 +1,5 @@
+# BanCinematic 3.0.3
+
 **Make your server’s final warning unforgettable.**
 
 BanCinematic brings cinematic bans and moderation tools to Minecraft Paper servers, featuring a dramatic Warden send-off.

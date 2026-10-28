@@ -19,6 +19,7 @@ public final class CinematicSession {
     private final Long duration;
     private final Player player;
     private final CinematicSettings settings;
+    private final long startedNanos = System.nanoTime();
 
     private final GameMode previousGameMode;
     private final boolean previousInvulnerable;
@@ -67,6 +68,9 @@ public final class CinematicSession {
     public Long duration() { return duration; }
     public Player player() { return player; }
     public CinematicSettings settings() { return settings; }
+    public boolean hasTimedOut() {
+        return System.nanoTime() - startedNanos >= java.util.concurrent.TimeUnit.SECONDS.toNanos(settings.maxSeconds());
+    }
 
     public Entity monster() { return monster; }
     public void monster(Entity monster) { this.monster = monster; }

@@ -123,6 +123,9 @@ class RuntimeFlowTest {
         }
     }
 
+    @org.junit.jupiter.api.AfterEach
+    void closeDatabase() { database.close(); }
+
     @Test
     void joinRecordsIdentityAndBanThenLoginThenUnbanWorkInSequence() {
         UUID uuid = UUID.randomUUID();
@@ -149,6 +152,9 @@ class RuntimeFlowTest {
                     sender, command, "ban", new String[]{"taupaipai", "cheating"});
         }
         assertNotNull(manager.get(uuid), "Ban offline deve ser persistido pela UUID conhecida.");
+        assertEquals("Taupaipai", manager.get(uuid).name());
+        assertEquals("Taupaipai", history.getHistoryPage(uuid, 0, 8).entries().get(0).player());
+        verify(plugin).broadcastPunishment("messages.broadcast.ban", "Taupaipai", "cheating", "CONSOLE", "");
         verify(cinematic, never()).start(any(), any(), anyString(), any());
 
         AsyncPlayerPreLoginEvent loginEvent = mock(AsyncPlayerPreLoginEvent.class);
@@ -506,45 +512,166 @@ class RuntimeFlowTest {
         }
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void monsterGraduallyLooksFromItsEyesAtPlayerEyesWhileWalkingOrStanding(boolean walking) throws Exception {
+        try (var registries = mockPaperRegistries()) {
+            configureCinematicConstruction();
+            var cinematic = new BanCinematic(plugin, mock(BanManager.class));
+            var player = mock(Player.class);
+            when(player.getLocation()).thenAnswer(call -> new Location(null, 0, 64, 0));
+            when(player.getEyeLocation()).thenAnswer(call -> new Location(null, 0, 65.6, 0));
+            var monster = mock(org.bukkit.entity.LivingEntity.class);
+            var current = new java.util.concurrent.atomic.AtomicReference<>(new Location(null, 4, 64, 0));
+            when(monster.getLocation()).thenAnswer(call -> current.get().clone());
+            when(monster.getEyeHeight()).thenReturn(8.0);
+            doAnswer(call -> { current.set(call.<Location>getArgument(0).clone()); return true; })
+                    .when(monster).teleport(any(Location.class));
+            var session = new CinematicSession(player, new Location(null, 0, 64, 0),
+                    mock(CommandSender.class), "CONSOLE", "test", null, CinematicSettings.from(config));
+            session.phase(CinematicSession.Phase.WALKING);
+            var method = walking
+                    ? BanCinematic.class.getDeclaredMethod("step", CinematicSession.class, org.bukkit.entity.Entity.class, Player.class)
+                    : BanCinematic.class.getDeclaredMethod("face", org.bukkit.entity.Entity.class, Player.class);
+            method.setAccessible(true);
+            for (int i = 0; i < 80; i++) {
+                float previous = current.get().getPitch();
+                if (walking) method.invoke(cinematic, session, monster, player);
+                else method.invoke(cinematic, monster, player);
+                assertTrue(Math.abs(current.get().getPitch() - previous) <= 3.51);
+                assertTrue(current.get().getPitch() > 0);
+            }
+            double expected = Math.toDegrees(Math.atan2(6.4, current.get().getX()));
+            assertEquals(expected, current.get().getPitch(), 0.2);
+            assertEquals(64, current.get().getY(), 0.001);
+            if (walking) assertTrue(current.get().getX() < 4);
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {true, false})
+    void cinematicHitUsesOnlyVisualLightningAndRespectsItsToggle(boolean enabled) throws Exception {
+        try (var registries = mockPaperRegistries()) {
+            configureCinematicConstruction();
+            config.set("cinematic.lightning-on-hit", enabled ? null : false);
+            config.set("cinematic.particles", false);
+            config.set("cinematic.sounds", false);
+            var cinematic = new BanCinematic(plugin, mock(BanManager.class));
+            var player = mock(Player.class);
+            var world = mock(org.bukkit.World.class);
+            var location = new Location(world, 0, 64, 0);
+            when(player.getLocation()).thenReturn(location);
+            var session = new CinematicSession(player, location, mock(CommandSender.class),
+                    "CONSOLE", "test", null, CinematicSettings.from(config));
+            session.phase(CinematicSession.Phase.ATTACKING);
+            var hit = BanCinematic.class.getDeclaredMethod("hit", CinematicSession.class, Player.class);
+            hit.setAccessible(true);
+            hit.invoke(cinematic, session, player);
+            verify(world, org.mockito.Mockito.times(enabled ? 1 : 0)).strikeLightningEffect(location);
+            verify(world, never()).strikeLightning(any(Location.class));
+            assertEquals(CinematicSession.Phase.IMPACT, session.phase());
+            verify(player, never()).kick(any(net.kyori.adventure.text.Component.class));
+        }
+    }
+
+    @Test
+    void dissolveParticleAcceptsSimpleEffectsAndFallsBackForInvalidOrDataEffects() {
+        assertEquals(org.bukkit.Particle.SCULK_SOUL, CinematicSettings.from(config).dissolveParticle());
+        config.set("cinematic.dissolve-particle", "cloud");
+        assertEquals(org.bukkit.Particle.CLOUD, CinematicSettings.from(config).dissolveParticle());
+        for (String effect : List.of("INVALID", "DUST")) {
+            config.set("cinematic.dissolve-particle", effect);
+            assertEquals(org.bukkit.Particle.SCULK_SOUL, CinematicSettings.from(config).dissolveParticle());
+        }
+    }
+
     @Test
     @SuppressWarnings("unchecked")
-    void normalCinematicKickDoesNotDuplicateAnnouncementsWhenQuitIsFired() throws Exception {
+    void cinematicGlobalDeadlineCleansEveryPhaseAndDissolveWithoutDuplicateAnnouncements() throws Exception {
         try (var registries = mockPaperRegistries(); var bukkit = mockStatic(Bukkit.class)) {
-            configureCinematicConstruction();
-            BanManager manager = mock(BanManager.class);
-            BanCinematic cinematic = new BanCinematic(plugin, manager);
-            Player player = mock(Player.class);
-            UUID uuid = UUID.randomUUID();
-            when(player.getUniqueId()).thenReturn(uuid);
-            when(player.getName()).thenReturn("Alvo");
-            when(player.getGameMode()).thenReturn(org.bukkit.GameMode.SURVIVAL);
-            when(player.getPersistentDataContainer()).thenReturn(mock(org.bukkit.persistence.PersistentDataContainer.class));
-            var online = new java.util.concurrent.atomic.AtomicBoolean(true);
-            when(player.isOnline()).thenAnswer(call -> online.get());
-            CinematicSession session = new CinematicSession(player, new Location(null, 0, 64, 0),
-                    mock(CommandSender.class), "CONSOLE", "regra", 60L, CinematicSettings.from(config));
-            var sessionsField = BanCinematic.class.getDeclaredField("sessions");
-            sessionsField.setAccessible(true);
-            ((java.util.Map<UUID, CinematicSession>) sessionsField.get(cinematic)).put(uuid, session);
-            doAnswer(call -> {
-                online.set(false);
-                cinematic.onQuit(new org.bukkit.event.player.PlayerQuitEvent(player,
-                        net.kyori.adventure.text.Component.text("quit")));
-                return null;
-            }).when(player).kick(any(net.kyori.adventure.text.Component.class));
-            BukkitScheduler scheduler = mock(BukkitScheduler.class);
-            bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
-            when(scheduler.runTaskLater(eq(plugin), any(Runnable.class), eq(1L))).thenAnswer(call -> {
-                call.<Runnable>getArgument(1).run();
-                return mock(BukkitTask.class);
-            });
-            var finish = BanCinematic.class.getDeclaredMethod("finishHit", CinematicSession.class, Player.class);
-            finish.setAccessible(true);
-            finish.invoke(cinematic, session, player);
-            verify(manager).announceBan("Alvo", "regra", "CONSOLE", 60L);
-            verify(manager).sendBanConfirmation(session.source(), "Alvo", "regra", 60L);
-            verify(player).kick(any(net.kyori.adventure.text.Component.class));
-            assertFalse(cinematic.isRunning(uuid));
+            config.set("cinematic.max-seconds", 1);
+            config.set("cinematic.emerge-ticks", Integer.MAX_VALUE);
+            config.set("cinematic.windup-ticks", Integer.MAX_VALUE);
+            var phases = new java.util.ArrayList<CinematicSession.Phase>();
+            phases.add(null);
+            phases.addAll(List.of(CinematicSession.Phase.values()));
+            for (var phase : phases) {
+                configureCinematicConstruction();
+                BanManager manager = mock(BanManager.class);
+                BanCinematic cinematic = new BanCinematic(plugin, manager);
+                Player player = mock(Player.class);
+                UUID uuid = UUID.randomUUID();
+                when(player.getUniqueId()).thenReturn(uuid);
+                when(player.getName()).thenReturn("Alvo");
+                when(player.getGameMode()).thenReturn(org.bukkit.GameMode.SURVIVAL);
+                when(player.isCollidable()).thenReturn(true);
+                when(player.getPersistentDataContainer()).thenReturn(mock(org.bukkit.persistence.PersistentDataContainer.class));
+                var online = new java.util.concurrent.atomic.AtomicBoolean(true);
+                when(player.isOnline()).thenAnswer(call -> online.get());
+                CinematicSession session = new CinematicSession(player, new Location(null, 0, 64, 0),
+                        mock(CommandSender.class), "CONSOLE", "regra", 60L, CinematicSettings.from(config));
+                assertFalse(session.hasTimedOut());
+                var task = mock(org.bukkit.scheduler.BukkitRunnable.class);
+                session.task(task);
+                var monster = mock(org.bukkit.entity.Entity.class);
+                UUID monsterId = UUID.randomUUID();
+                when(monster.getUniqueId()).thenReturn(monsterId);
+                when(monster.isValid()).thenReturn(true);
+                when(monster.getLocation()).thenReturn(new Location(mock(org.bukkit.World.class), 0, 64, 0));
+                session.monster(monster);
+                var sessionsField = BanCinematic.class.getDeclaredField("sessions");
+                sessionsField.setAccessible(true);
+                ((java.util.Map<UUID, CinematicSession>) sessionsField.get(cinematic)).put(uuid, session);
+                var monstersField = BanCinematic.class.getDeclaredField("activeMonsters");
+                monstersField.setAccessible(true);
+                ((java.util.Map<UUID, org.bukkit.entity.Entity>) monstersField.get(cinematic)).put(monsterId, monster);
+                doAnswer(call -> {
+                    online.set(false);
+                    cinematic.onQuit(new org.bukkit.event.player.PlayerQuitEvent(player,
+                            net.kyori.adventure.text.Component.text("quit")));
+                    return null;
+                }).when(player).kick(any(net.kyori.adventure.text.Component.class));
+                BukkitScheduler scheduler = mock(BukkitScheduler.class);
+                bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+                when(scheduler.runTaskLater(eq(plugin), any(Runnable.class), eq(1L))).thenAnswer(call -> {
+                    call.<Runnable>getArgument(1).run();
+                    return mock(BukkitTask.class);
+                });
+                var dissolve = new java.util.concurrent.atomic.AtomicReference<Runnable>();
+                when(scheduler.runTaskTimer(eq(plugin), any(Runnable.class), eq(1L), eq(1L))).thenAnswer(call -> {
+                    dissolve.set(call.getArgument(1));
+                    return mock(BukkitTask.class);
+                });
+                var started = CinematicSession.class.getDeclaredField("startedNanos");
+                started.setAccessible(true);
+                if (phase == null) {
+                    var finish = BanCinematic.class.getDeclaredMethod("finishHit", CinematicSession.class, Player.class);
+                    finish.setAccessible(true);
+                    finish.invoke(cinematic, session, player);
+                    assertNotNull(dissolve.get());
+                    started.setLong(session, System.nanoTime() - java.util.concurrent.TimeUnit.SECONDS.toNanos(2));
+                    dissolve.get().run();
+                } else {
+                    session.phase(phase);
+                    started.setLong(session, System.nanoTime() - java.util.concurrent.TimeUnit.SECONDS.toNanos(2));
+                    var tick = BanCinematic.class.getDeclaredMethod("tick", CinematicSession.class, Player.class);
+                    tick.setAccessible(true);
+                    tick.invoke(cinematic, session, player);
+                    tick.invoke(cinematic, session, player);
+                    assertNull(dissolve.get());
+                    verify(player, never()).getLocation();
+                }
+                verify(manager).announceBan("Alvo", "regra", "CONSOLE", 60L);
+                verify(manager).sendBanConfirmation(session.source(), "Alvo", "regra", 60L);
+                verify(player).kick(any(net.kyori.adventure.text.Component.class));
+                verify(player).setGameMode(org.bukkit.GameMode.SURVIVAL);
+                verify(player).setInvulnerable(false);
+                verify(player).setCollidable(true);
+                verify(task).cancel();
+                verify(monster).remove();
+                assertFalse(cinematic.isRunning(uuid));
+                assertTrue(((java.util.Map<?, ?>) monstersField.get(cinematic)).isEmpty());
+            }
         }
     }
 
@@ -619,7 +746,7 @@ class RuntimeFlowTest {
 
     @Test
     void identityPersistenceCanBeRetriedAfterDatabaseFailure() throws Exception {
-        DatabaseManager failingDatabase = org.mockito.Mockito.spy(database);
+        DatabaseManager failingDatabase = org.mockito.Mockito.spy(new DatabaseManager(plugin));
         IdentityStorage storage = new IdentityStorage(plugin, failingDatabase);
         org.mockito.Mockito.doThrow(new java.sql.SQLException("offline"))
                 .doCallRealMethod().when(failingDatabase).connect();
@@ -630,6 +757,7 @@ class RuntimeFlowTest {
         IdentityStorage reloaded = new IdentityStorage(plugin, database);
         assertEquals(uuid, reloaded.resolve("Alvo"));
         assertNotNull(reloaded.get("Alvo").lastSeen());
+        failingDatabase.close();
     }
 
     @Test
@@ -646,7 +774,7 @@ class RuntimeFlowTest {
                 org.bukkit.command.CommandExecutor.class);
         register.setAccessible(true);
         var check = new br.com.bancinematic.command.CheckCommand(plugin,
-                mock(BanManager.class), mock(MuteManager.class));
+                mock(PunishmentStorage.class));
         register.invoke(plugin, "check", check);
         assertEquals(check, command.getExecutor());
         CommandSender denied = mock(CommandSender.class);
@@ -661,7 +789,7 @@ class RuntimeFlowTest {
     }
 
     @Test
-    void checkShowsPersistedIdentityAndActivePunishmentsToConsoleThroughWorker() {
+    void checkShowsPersistedIdentityAndActivePunishmentsWithTwoQueries() throws Exception {
         UUID uuid = UUID.randomUUID();
         assertTrue(identities.record(uuid, "Alvo"));
         var recorded = identities.get("alvo");
@@ -672,8 +800,12 @@ class RuntimeFlowTest {
         assertEquals(PunishmentResult.SUCCESS, bans.ban(uuid, "Alvo", "BanReason", "Admin").join());
         assertEquals(PunishmentResult.SUCCESS, mutes.tempMute(uuid, "Alvo", "MuteReason", "Staff", 3600).join());
         ConsoleCommandSender sender = mock(ConsoleCommandSender.class);
-        new br.com.bancinematic.command.CheckCommand(plugin, bans, mutes).onCommand(
+        DatabaseManager observed = org.mockito.Mockito.spy(database);
+        when(plugin.identities()).thenReturn(new IdentityStorage(plugin, observed));
+        new br.com.bancinematic.command.CheckCommand(plugin,
+                new PunishmentStorage(plugin, observed, PunishmentStorage.Kind.MUTE)).onCommand(
                 sender, mock(Command.class), "check", new String[]{"aLvO"});
+        verify(observed, org.mockito.Mockito.times(2)).execute(any());
         verify(sender).sendMessage(contains(uuid.toString()));
         verify(sender).sendMessage(contains("Última entrada:"));
         verify(sender).sendMessage(contains("BanReason"));
@@ -691,10 +823,7 @@ class RuntimeFlowTest {
         assertTrue(banStorage.put(new PunishmentData(uuid, "Alvo", "expirado", "Admin", Instant.now().minusSeconds(1))));
         assertTrue(muteStorage.put(new br.com.bancinematic.punishment.PunishmentData(
                 uuid, "Alvo", "expirado", "Admin", Instant.now().minusSeconds(1))));
-        PunishmentLogger history = new PunishmentLogger(plugin, database);
-        var check = new br.com.bancinematic.command.CheckCommand(plugin,
-                new BanManager(plugin, banStorage, history, DatabaseExecutor.inline()),
-                new MuteManager(plugin, muteStorage, history, DatabaseExecutor.inline()));
+        var check = new br.com.bancinematic.command.CheckCommand(plugin, muteStorage);
         CommandSender sender = mock(CommandSender.class);
         check.onCommand(sender, mock(Command.class), "check", new String[]{});
         verify(sender).sendMessage(contains("Uso: /check"));
@@ -874,7 +1003,7 @@ class RuntimeFlowTest {
         CommandSender sender = mock(CommandSender.class);
         when(sender.getName()).thenReturn("staff");
         Command command = mock(Command.class);
-        config.set("messages.confirmations.kick", "KICKED:%player%:%reason%");
+        config.set("messages.confirmations.kick", "&aKICKED:%player%:%reason%");
         PunishmentLogger history = new PunishmentLogger(plugin, database);
 
         try (var bukkit = mockStatic(Bukkit.class)) {
@@ -891,6 +1020,7 @@ class RuntimeFlowTest {
                 .filter(invocation -> invocation.getMethod().getName().equals("sendMessage"))
                 .count();
         assertEquals(1, responses, "O comando não deve enviar duas confirmações ao staff.");
+        verify(sender).sendMessage(plugin.messages().component("&aKICKED:Alvo:regra"));
     }
 
     @Test
@@ -1110,19 +1240,33 @@ class RuntimeFlowTest {
         config.set("messages.temp-muted", "TEMPMUTE_OK:%player%");
         try (var bukkit = mockStatic(Bukkit.class)) {
             new BanCommand(plugin, bans, mock(BanCinematic.class)).onCommand(
-                    console, command, "ban", new String[]{"Alvo", "regra"});
+                    console, command, "ban", new String[]{"aLvO", "regra"});
             verify(console).sendMessage(net.kyori.adventure.text.Component.text("BAN_OK:Alvo"));
-            assertEquals(PunishmentResult.SUCCESS, bans.unban(uuid, "Alvo", "CONSOLE").join());
+            assertEquals("Alvo", bans.get(uuid).name());
+            new UnbanCommand(plugin, bans, mock(BanCinematic.class)).onCommand(console, command, "unban", new String[]{"aLvO"});
+            verify(console).sendMessage("UNBANNED:Alvo");
+            assertNull(bans.get(uuid));
             new TempBanCommand(plugin, bans, mock(BanCinematic.class)).onCommand(
-                    console, command, "tempban", new String[]{"Alvo", "1d", "regra"});
+                    console, command, "tempban", new String[]{"aLvO", "1d", "regra"});
             verify(console).sendMessage(net.kyori.adventure.text.Component.text("TEMPBAN_OK:Alvo"));
             new MuteCommand(plugin, mutes).onCommand(
-                    console, command, "mute", new String[]{"Alvo", "regra"});
+                    console, command, "mute", new String[]{"aLvO", "regra"});
             verify(console).sendMessage("MUTE_OK:Alvo");
-            assertEquals(PunishmentResult.SUCCESS, mutes.unmute(uuid, "Alvo", "CONSOLE").join());
+            assertEquals("Alvo", mutes.get(uuid).name());
+            new UnmuteCommand(plugin, mutes).onCommand(console, command, "unmute", new String[]{"aLvO"});
+            verify(console).sendMessage("UNMUTED:Alvo");
+            assertNull(mutes.get(uuid));
             new TempMuteCommand(plugin, mutes).onCommand(
-                    console, command, "tempmute", new String[]{"Alvo", "1d", "regra"});
+                    console, command, "tempmute", new String[]{"aLvO", "1d", "regra"});
             verify(console).sendMessage("TEMPMUTE_OK:Alvo");
+            assertEquals("Alvo", bans.get(uuid).name());
+            assertEquals("Alvo", mutes.get(uuid).name());
+            var entries = history.getHistoryPage(uuid, 0, 8).entries();
+            assertEquals(6, entries.size());
+            assertTrue(entries.stream().allMatch(entry -> entry.player().equals("Alvo")));
+            for (String type : List.of("ban", "tempban", "mute", "tempmute")) {
+                verify(plugin).broadcastPunishment(eq("messages.broadcast." + type), eq("Alvo"), eq("regra"), eq("CONSOLE"), anyString());
+            }
         }
     }
 
@@ -1233,3 +1377,4 @@ class RuntimeFlowTest {
         verify(sender).sendMessage("USE_TEMPMUTE");
     }
 }
+

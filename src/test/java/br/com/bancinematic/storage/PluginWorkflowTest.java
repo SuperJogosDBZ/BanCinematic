@@ -59,6 +59,9 @@ class PluginWorkflowTest {
         database = new DatabaseManager(plugin);
     }
 
+    @org.junit.jupiter.api.AfterEach
+    void closeDatabase() { database.close(); }
+
     @Test
     void freshSqliteDatabaseSupportsIdentitiesPunishmentsAndHistory() throws SQLException {
         database.initialize();
@@ -110,11 +113,16 @@ class PluginWorkflowTest {
 
         var entries = history.getHistoryPage(uuid, 0, 8).entries();
         assertEquals(4, entries.size());
-        assertEquals("UNMUTE", entries.get(0).type());
-        assertEquals("TEMPMUTE", entries.get(1).type());
-        assertEquals("UNBAN", entries.get(2).type());
-        assertEquals("BAN", entries.get(3).type());
-        assertEquals("Admin123", entries.get(3).source());
+        assertEquals(java.util.Set.of("BAN", "UNBAN", "TEMPMUTE", "UNMUTE"),
+                entries.stream().map(PunishmentLogger.HistoryEntry::type).collect(java.util.stream.Collectors.toSet()));
+        assertEquals(4, entries.stream().map(PunishmentLogger.HistoryEntry::id).distinct().count());
+        assertTrue(entries.stream().allMatch(entry -> entry.uniqueId().equals(uuid) && entry.source().equals(admin)));
+        for (int i = 1; i < entries.size(); i++) {
+            var previous = entries.get(i - 1);
+            var current = entries.get(i);
+            int order = Instant.parse(previous.date()).compareTo(Instant.parse(current.date()));
+            assertTrue(order > 0 || order == 0 && previous.id().compareTo(current.id()) > 0);
+        }
         assertEquals("CONSOLE", history.getHistoryPage(permanentMuteId, 0, 8).entries().get(0).source());
 
         UUID temporaryBanId = UUID.randomUUID();
@@ -226,6 +234,12 @@ class PluginWorkflowTest {
         assertEquals(mute, mutes.get(id));
         assertEquals(2, bans.revision());
         assertEquals(1, mutes.revision());
+        assertEquals(PunishmentResult.NOT_ACTIVE, bans.removeAndLog(id, "BanName", "Removido", "Admin",
+                br.com.bancinematic.punishment.PunishmentType.UNBAN, history));
+        assertEquals(2, bans.revision());
+        assertEquals(PunishmentResult.NOT_ACTIVE, mutes.removeAndLog(UUID.randomUUID(), "Missing", "Removido", "Admin",
+                br.com.bancinematic.punishment.PunishmentType.UNMUTE, history));
+        assertEquals(1, mutes.revision());
         assertTrue(bans.put(new PunishmentData(id, "ExpiredBan", "old", "Admin", Instant.now().minusSeconds(60))));
         bans.cleanupExpired();
         assertEquals(0, countRows("ban_records", id));
@@ -254,20 +268,21 @@ class PluginWorkflowTest {
             assertTrue(bans.put(new PunishmentData(expired, "Alvo", "expired", "A", past)));
             assertTrue(mutes.put(new PunishmentData(expired, "Alvo", "expired", "A", past)));
             Connection connection = org.mockito.Mockito.spy(prefixed.connect());
-            DatabaseManager observed = org.mockito.Mockito.spy(prefixed);
+            DatabaseManager observed = org.mockito.Mockito.spy(new DatabaseManager(plugin));
             org.mockito.Mockito.doReturn(connection).when(observed).connect();
-            var joined = new PunishmentStorage(plugin, observed, PunishmentStorage.Kind.MUTE).getForJoin(both);
+            var joined = new PunishmentStorage(plugin, observed, PunishmentStorage.Kind.MUTE).getActivePunishments(both);
             assertEquals(ban, joined.ban());
             assertEquals(mute, joined.mute());
             org.mockito.Mockito.verify(connection).prepareStatement(org.mockito.ArgumentMatchers.contains("UNION ALL"));
             org.mockito.Mockito.verify(connection, org.mockito.Mockito.times(1))
                     .prepareStatement(org.mockito.ArgumentMatchers.anyString());
-            assertNull(mutes.getForJoin(onlyMute).ban());
-            assertNotNull(mutes.getForJoin(onlyMute).mute());
-            assertNotNull(mutes.getForJoin(onlyBan).ban());
-            assertNull(mutes.getForJoin(onlyBan).mute());
-            assertEquals(new br.com.bancinematic.punishment.JoinPunishments(null, null), mutes.getForJoin(expired));
-            assertEquals(new br.com.bancinematic.punishment.JoinPunishments(null, null), mutes.getForJoin(UUID.randomUUID()));
+            observed.close();
+            assertNull(mutes.getActivePunishments(onlyMute).ban());
+            assertNotNull(mutes.getActivePunishments(onlyMute).mute());
+            assertNotNull(mutes.getActivePunishments(onlyBan).ban());
+            assertNull(mutes.getActivePunishments(onlyBan).mute());
+            assertEquals(new br.com.bancinematic.punishment.ActivePunishments(null, null), mutes.getActivePunishments(expired));
+            assertEquals(new br.com.bancinematic.punishment.ActivePunishments(null, null), mutes.getActivePunishments(UUID.randomUUID()));
         }
     }
 
@@ -372,8 +387,8 @@ class PluginWorkflowTest {
             assertEquals(PunishmentResult.SUCCESS,
                     banManager.ban(uuid, "MySqlIntegration", "teste", "MySqlAdmin").join());
             assertEquals("teste", bans.get(uuid).reason());
-            assertEquals("teste", mutes.getForJoin(uuid).ban().reason());
-            assertNull(mutes.getForJoin(uuid).mute());
+            assertEquals("teste", mutes.getActivePunishments(uuid).ban().reason());
+            assertNull(mutes.getActivePunishments(uuid).mute());
             assertEquals(PunishmentResult.SUCCESS,
                     banManager.unban(uuid, "MySqlIntegration", "MySqlAdmin").join());
             assertNull(bans.get(uuid));
@@ -381,8 +396,8 @@ class PluginWorkflowTest {
             assertEquals(PunishmentResult.SUCCESS,
                     muteManager.mute(uuid, "MySqlIntegration", "teste", "MySqlAdmin").join());
             assertEquals("teste", mutes.get(uuid).reason());
-            assertNull(mutes.getForJoin(uuid).ban());
-            assertEquals("teste", mutes.getForJoin(uuid).mute().reason());
+            assertNull(mutes.getActivePunishments(uuid).ban());
+            assertEquals("teste", mutes.getActivePunishments(uuid).mute().reason());
             assertEquals(PunishmentResult.SUCCESS,
                     muteManager.unmute(uuid, "MySqlIntegration", "MySqlAdmin").join());
             assertNull(mutes.get(uuid));

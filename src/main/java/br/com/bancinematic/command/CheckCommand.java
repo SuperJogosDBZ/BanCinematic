@@ -1,8 +1,8 @@
 package br.com.bancinematic.command;
 
 import br.com.bancinematic.BanCinematicPlugin;
-import br.com.bancinematic.punishment.BanManager;
-import br.com.bancinematic.punishment.MuteManager;
+import br.com.bancinematic.punishment.ActivePunishments;
+import br.com.bancinematic.storage.PunishmentStorage;
 import br.com.bancinematic.util.TimeUtil;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
@@ -16,13 +16,11 @@ public final class CheckCommand implements CommandExecutor {
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("dd/MM/yyyy HH:mm:ss")
             .withZone(ZoneId.systemDefault());
     private final BanCinematicPlugin plugin;
-    private final BanManager bans;
-    private final MuteManager mutes;
+    private final PunishmentStorage punishments;
 
-    public CheckCommand(BanCinematicPlugin plugin, BanManager bans, MuteManager mutes) {
+    public CheckCommand(BanCinematicPlugin plugin, PunishmentStorage punishments) {
         this.plugin = plugin;
-        this.bans = bans;
-        this.mutes = mutes;
+        this.punishments = punishments;
     }
 
     @Override
@@ -33,7 +31,7 @@ public final class CheckCommand implements CommandExecutor {
         }
         CommandUtil.query(plugin, sender, () -> {
             var identity = plugin.identities().get(args[0]);
-            return identity == null ? null : new Result(identity, bans.get(identity.uuid()), mutes.get(identity.uuid()));
+            return identity == null ? null : new Result(identity, punishments.getActivePunishments(identity.uuid()));
         }, result -> {
             if (result == null) {
                 sender.sendMessage(plugin.messages().get("messages.player-never-joined"));
@@ -43,10 +41,10 @@ public final class CheckCommand implements CommandExecutor {
             send(sender, "title", "%player%", identity.name());
             send(sender, "uuid", "%uuid%", identity.uuid().toString());
             send(sender, "last-seen", "%date%", DATE.format(identity.lastSeen()));
-            var ban = result.ban();
+            var ban = result.punishments().ban();
             if (ban == null) send(sender, "no-ban");
             else punishment(sender, "ban", ban.reason(), ban.source(), ban.expires());
-            var mute = result.mute();
+            var mute = result.punishments().mute();
             if (mute == null) send(sender, "no-mute");
             else punishment(sender, "mute", mute.reason(), mute.source(), mute.expires());
         });
@@ -54,7 +52,7 @@ public final class CheckCommand implements CommandExecutor {
     }
 
     private record Result(br.com.bancinematic.storage.IdentityStorage.Identity identity,
-                          br.com.bancinematic.punishment.PunishmentData ban, br.com.bancinematic.punishment.PunishmentData mute) {}
+                          ActivePunishments punishments) {}
 
     private void punishment(CommandSender sender, String key, String reason, String source, Instant expires) {
         send(sender, key, "%reason%", reason, "%source%", source, "%time%",

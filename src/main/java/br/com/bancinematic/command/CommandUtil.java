@@ -1,6 +1,7 @@
 package br.com.bancinematic.command;
 
 import br.com.bancinematic.BanCinematicPlugin;
+import br.com.bancinematic.storage.IdentityStorage;
 import br.com.bancinematic.util.InputLimits;
 import org.bukkit.command.CommandSender;
 
@@ -35,20 +36,22 @@ final class CommandUtil {
     }
 
     static void resolveKnownPlayer(BanCinematicPlugin plugin, CommandSender sender, String name,
-                                   java.util.function.Consumer<UUID> action) {
-        query(plugin, sender, () -> plugin.identities().resolve(name), uuid -> {
-            if (uuid == null) sender.sendMessage(plugin.messages().get("messages.player-never-joined"));
-            else action.accept(uuid);
+                                   java.util.function.Consumer<IdentityStorage.Identity> action) {
+        query(plugin, sender, () -> plugin.identities().get(name), identity -> {
+            if (identity == null) sender.sendMessage(plugin.messages().get("messages.player-never-joined"));
+            else action.accept(identity);
         });
     }
 
     static Target target(BanCinematicPlugin plugin, String input,
                          java.util.function.Function<UUID, String> storedName) {
         UUID explicit = parseUuid(input);
-        UUID uuid = explicit == null ? plugin.identities().resolve(input) : explicit;
-        if (uuid == null) return null;
-        String name = explicit == null ? input : storedName.apply(uuid);
-        return new Target(uuid, name == null || name.isBlank() ? input : name);
+        if (explicit == null) {
+            var identity = plugin.identities().get(input);
+            return identity == null ? null : new Target(identity.uuid(), identity.name());
+        }
+        String name = storedName.apply(explicit);
+        return new Target(explicit, name == null || name.isBlank() ? input : name);
     }
 
     record Target(UUID uuid, String name) {}
