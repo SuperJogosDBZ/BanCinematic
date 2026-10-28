@@ -79,7 +79,6 @@ public final class DatabaseManager implements AutoCloseable {
         execute(connection -> {
             try (Statement statement = connection.createStatement()) {
                 if (sqlite) {
-                    // WAL persiste no arquivo; cada conexão mantém synchronous no padrão FULL.
                     statement.execute(sql("PRAGMA journal_mode=WAL"));
                 }
                 statement.execute(sql("CREATE TABLE IF NOT EXISTS ban_records ("
@@ -126,7 +125,6 @@ public final class DatabaseManager implements AutoCloseable {
                 tablePrefix + "$1");
     }
 
-    /** Abre uma conexão independente; o chamador deve fechá-la. Operações do plugin usam execute. */
     public Connection connect() throws SQLException {
         Connection connection = properties.isEmpty()
                 ? DriverManager.getConnection(jdbcUrl)
@@ -137,7 +135,6 @@ public final class DatabaseManager implements AutoCloseable {
                     statement.execute(sql("PRAGMA busy_timeout=5000"));
                 }
             } else {
-                // Evita gap locks ao remover expirados antes de um INSERT concorrente.
                 connection.setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
             }
             return connection;
@@ -161,7 +158,6 @@ public final class DatabaseManager implements AutoCloseable {
         try {
             return operation.execute(mysqlConnection);
         } catch (SQLException | RuntimeException | Error error) {
-            // Não repetir escritas: um erro de rede pode ocorrer depois do commit.
             closeMysqlConnection();
             throw error;
         } finally {
@@ -213,7 +209,6 @@ public final class DatabaseManager implements AutoCloseable {
     private boolean isMysqlConnectionUsable() {
         try {
             if (mysqlConnection == null || mysqlConnection.isClosed()) return false;
-            // Uma operação recente já confirmou a conexão; validar só após ociosidade.
             return nanoTime.getAsLong() - mysqlLastUsedNanos < MYSQL_VALIDATION_IDLE_NANOS
                     || mysqlConnection.isValid(2);
         } catch (SQLException error) {

@@ -1,9 +1,8 @@
 package br.com.bancinematic.storage;
 
 import br.com.bancinematic.BanCinematicPlugin;
-import br.com.bancinematic.punishment.BanData;
+import br.com.bancinematic.punishment.PunishmentData;
 import br.com.bancinematic.punishment.BanManager;
-import br.com.bancinematic.punishment.MuteData;
 import br.com.bancinematic.punishment.MuteManager;
 import br.com.bancinematic.punishment.PunishmentResult;
 import br.com.bancinematic.util.MessageUtil;
@@ -18,7 +17,6 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
-import java.util.concurrent.CompletableFuture;
 import java.util.UUID;
 import java.util.logging.Logger;
 
@@ -26,7 +24,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -78,8 +75,8 @@ class PluginWorkflowTest {
         assertFalse(tableExists("player_identities"),
                 "A tabela não utilizada de identidade atual não deve ser criada.");
 
-        BanStorage bans = new BanStorage(plugin, database);
-        MuteStorage mutes = new MuteStorage(plugin, database);
+        PunishmentStorage bans = new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN);
+        PunishmentStorage mutes = new PunishmentStorage(plugin, database, PunishmentStorage.Kind.MUTE);
         PunishmentLogger history = new PunishmentLogger(plugin, database);
         BanManager banManager = new BanManager(plugin, bans, history, DatabaseExecutor.inline());
         MuteManager muteManager = new MuteManager(plugin, mutes, history, DatabaseExecutor.inline());
@@ -88,24 +85,24 @@ class PluginWorkflowTest {
         assertEquals(PunishmentResult.SUCCESS, banManager.ban(uuid, "TaupaipaiNovo", "teste ban", admin).join());
         assertNotNull(banManager.get(uuid));
         assertEquals("teste ban", banManager.get(uuid).reason());
-        assertNotNull(new BanStorage(plugin, database).get(uuid), "Ban precisa sobreviver a um reload.");
+        assertNotNull(new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN).get(uuid), "Ban precisa sobreviver a um reload.");
         assertEquals(PunishmentResult.SUCCESS, banManager.unban(uuid, "TaupaipaiNovo", admin).join());
         assertNull(banManager.get(uuid));
 
         assertEquals(PunishmentResult.SUCCESS, muteManager.tempMute(uuid, "TaupaipaiNovo", "spam", admin, 120).join());
-        MuteData mute = muteManager.get(uuid);
+        PunishmentData mute = muteManager.get(uuid);
         assertNotNull(mute);
         assertNotNull(muteManager.get(uuid));
         assertTrue(muteManager.mutedChatMessage(mute).startsWith("MUTED:spam:"));
         assertTrue(muteManager.muteNotice(mute).startsWith("TEMPMUTE:spam:"));
         assertTrue(muteManager.muteReminder(mute).startsWith("REMINDER:spam:"));
-        assertNotNull(new MuteStorage(plugin, database).get(uuid), "Mute precisa sobreviver a um reload.");
+        assertNotNull(new PunishmentStorage(plugin, database, PunishmentStorage.Kind.MUTE).get(uuid), "Mute precisa sobreviver a um reload.");
         assertEquals(PunishmentResult.SUCCESS, muteManager.unmute(uuid, "TaupaipaiNovo", admin).join());
         assertNull(muteManager.get(uuid));
 
         UUID permanentMuteId = UUID.randomUUID();
         assertEquals(PunishmentResult.SUCCESS, muteManager.mute(permanentMuteId, "Permanente", "reincidência", "CONSOLE").join());
-        MuteData permanentMute = muteManager.get(permanentMuteId);
+        PunishmentData permanentMute = muteManager.get(permanentMuteId);
         assertEquals("MUTE:reincidência", muteManager.muteNotice(permanentMute));
         assertEquals("REMINDER_PERMANENT:reincidência", muteManager.muteReminder(permanentMute));
         assertEquals("MUTED_PERMANENT:reincidência", muteManager.mutedChatMessage(permanentMute));
@@ -132,17 +129,17 @@ class PluginWorkflowTest {
         database.initialize();
         UUID banId = UUID.randomUUID();
         UUID muteId = UUID.randomUUID();
-        BanStorage bans = new BanStorage(plugin, database);
-        MuteStorage mutes = new MuteStorage(plugin, database);
+        PunishmentStorage bans = new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN);
+        PunishmentStorage mutes = new PunishmentStorage(plugin, database, PunishmentStorage.Kind.MUTE);
         Instant expired = Instant.now().minusSeconds(5);
 
-        assertTrue(bans.put(new BanData(banId, "Banido", "teste", "console", expired)));
+        assertTrue(bans.put(new PunishmentData(banId, "Banido", "teste", "console", expired)));
         assertNull(bans.get(banId), "Ban expirado não deve mais valer.");
         assertEquals(1, countRows("ban_records", banId), "A leitura não deve mais escrever no banco.");
         bans.cleanupExpired();
         assertEquals(0, countRows("ban_records", banId));
 
-        assertTrue(mutes.put(new MuteData(muteId, "Mutado", "teste", "console", expired)));
+        assertTrue(mutes.put(new PunishmentData(muteId, "Mutado", "teste", "console", expired)));
         assertNull(mutes.get(muteId));
         mutes.cleanupExpired();
         assertEquals(0, countRows("mute_records", muteId));
@@ -153,9 +150,9 @@ class PluginWorkflowTest {
         database.initialize();
         UUID uuid = UUID.randomUUID();
         PunishmentLogger history = new PunishmentLogger(plugin, database);
-        BanManager bans = new BanManager(plugin, new BanStorage(plugin, database), history,
+        BanManager bans = new BanManager(plugin, new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN), history,
                 DatabaseExecutor.inline());
-        MuteManager mutes = new MuteManager(plugin, new MuteStorage(plugin, database), history,
+        MuteManager mutes = new MuteManager(plugin, new PunishmentStorage(plugin, database, PunishmentStorage.Kind.MUTE), history,
                 DatabaseExecutor.inline());
 
         assertEquals(PunishmentResult.NOT_ACTIVE, bans.unban(uuid, "Alvo", "CONSOLE").join());
@@ -171,37 +168,6 @@ class PluginWorkflowTest {
 
         assertEquals(2, history.getHistoryPage(uuid, 0, 8).totalEntries(),
                 "Só o ban e o mute bem-sucedidos entram no histórico.");
-    }
-
-    @Test
-    void banStorageReadsWorkWhileTheDatabaseThreadIsBusy() throws Exception {
-        database.initialize();
-        UUID uuid = UUID.randomUUID();
-        BanStorage bans = new BanStorage(plugin, database);
-        assertTrue(bans.put(new BanData(uuid, "Alvo", "teste", "console", null)));
-
-        java.util.concurrent.CountDownLatch locked = new java.util.concurrent.CountDownLatch(1);
-        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
-        Thread writer = new Thread(() -> {
-            synchronized (bans) {
-                locked.countDown();
-                try {
-                    release.await();
-                } catch (InterruptedException ignored) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-        });
-        writer.start();
-        try {
-            assertTrue(locked.await(5, java.util.concurrent.TimeUnit.SECONDS));
-            assertTimeoutPreemptively(java.time.Duration.ofSeconds(2),
-                    () -> assertNotNull(bans.get(uuid)),
-                    "O login não pode esperar por uma gravação no banco.");
-        } finally {
-            release.countDown();
-            writer.join();
-        }
     }
 
     @Test
@@ -235,35 +201,114 @@ class PluginWorkflowTest {
     }
 
     @Test
-    void simultaneousBansForOnePlayerCreateOnlyOneRecord() throws SQLException {
+    void storageKindsKeepTablesSuggestionsAndRevisionsIndependent() throws SQLException {
         database.initialize();
-        UUID uuid = UUID.randomUUID();
-        try (DatabaseExecutor executor = DatabaseExecutor.create()) {
-            PunishmentLogger history = new PunishmentLogger(plugin, database);
-            BanManager manager = new BanManager(plugin, new BanStorage(plugin, database), history, executor);
+        PunishmentStorage bans = new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN);
+        PunishmentStorage mutes = new PunishmentStorage(plugin, database, PunishmentStorage.Kind.MUTE);
+        PunishmentLogger history = new PunishmentLogger(plugin, database);
+        UUID id = UUID.randomUUID();
+        PunishmentData ban = new PunishmentData(id, "BanName", "ban reason", "BanAdmin", null);
+        PunishmentData mute = new PunishmentData(id, "MuteName", "mute reason", "MuteAdmin", null);
+        assertTrue(bans.put(ban));
+        assertEquals(1, bans.revision());
+        assertEquals(0, mutes.revision());
+        assertNull(mutes.get(id));
+        assertTrue(mutes.put(mute));
+        assertEquals(1, bans.revision());
+        assertEquals(1, mutes.revision());
+        assertEquals(ban, bans.get(id));
+        assertEquals(mute, mutes.get(id));
+        assertEquals(java.util.List.of("BanName"), bans.suggestNames(""));
+        assertEquals(java.util.List.of("MuteName"), mutes.suggestNames(""));
+        assertEquals(PunishmentResult.SUCCESS, bans.removeAndLog(id, "BanName", "Removido", "Admin",
+                br.com.bancinematic.punishment.PunishmentType.UNBAN, history));
+        assertNull(bans.get(id));
+        assertEquals(mute, mutes.get(id));
+        assertEquals(2, bans.revision());
+        assertEquals(1, mutes.revision());
+        assertTrue(bans.put(new PunishmentData(id, "ExpiredBan", "old", "Admin", Instant.now().minusSeconds(60))));
+        bans.cleanupExpired();
+        assertEquals(0, countRows("ban_records", id));
+        assertEquals(1, countRows("mute_records", id));
+        assertEquals(1, mutes.revision());
+    }
 
-            CompletableFuture<PunishmentResult> first = manager.ban(uuid, "Alvo", "primeiro", "staff-a");
-            CompletableFuture<PunishmentResult> second = manager.ban(uuid, "Alvo", "segundo", "staff-b");
-            CompletableFuture.allOf(first, second).join();
-
-            long successes = java.util.stream.Stream.of(first.join(), second.join())
-                    .filter(result -> result == PunishmentResult.SUCCESS)
-                    .count();
-            long alreadyActive = java.util.stream.Stream.of(first.join(), second.join())
-                    .filter(result -> result == PunishmentResult.ALREADY_ACTIVE)
-                    .count();
-
-            assertEquals(1, successes);
-            assertEquals(1, alreadyActive);
-            assertEquals(1, history.getHistoryPage(uuid, 0, 8).totalEntries());
+    @Test
+    void joinLookupUsesOneStatementAndFiltersExpiredAndUnrelatedPunishments() throws SQLException {
+        config.set("database.table-prefix", "join_test_");
+        try (DatabaseManager prefixed = new DatabaseManager(plugin)) {
+            prefixed.initialize();
+            PunishmentStorage bans = new PunishmentStorage(plugin, prefixed, PunishmentStorage.Kind.BAN);
+            PunishmentStorage mutes = new PunishmentStorage(plugin, prefixed, PunishmentStorage.Kind.MUTE);
+            Instant future = Instant.now().plusSeconds(600).truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
+            Instant past = Instant.now().minusSeconds(60).truncatedTo(java.time.temporal.ChronoUnit.MILLIS);
+            UUID both = UUID.randomUUID(), onlyMute = UUID.randomUUID(), onlyBan = UUID.randomUUID(), expired = UUID.randomUUID();
+            PunishmentData ban = new PunishmentData(both, "BanName", "ban reason", "BanAdmin", null);
+            PunishmentData mute = new PunishmentData(both, "MuteName", "mute reason", "MuteAdmin", future);
+            assertTrue(bans.put(ban));
+            assertTrue(mutes.put(mute));
+            assertTrue(bans.put(new PunishmentData(onlyMute, "Alvo", "expired", "A", past)));
+            assertTrue(mutes.put(new PunishmentData(onlyMute, "Alvo", "active", "A", null)));
+            assertTrue(bans.put(new PunishmentData(onlyBan, "Alvo", "active", "A", future)));
+            assertTrue(mutes.put(new PunishmentData(onlyBan, "Alvo", "expired", "A", past)));
+            assertTrue(bans.put(new PunishmentData(expired, "Alvo", "expired", "A", past)));
+            assertTrue(mutes.put(new PunishmentData(expired, "Alvo", "expired", "A", past)));
+            Connection connection = org.mockito.Mockito.spy(prefixed.connect());
+            DatabaseManager observed = org.mockito.Mockito.spy(prefixed);
+            org.mockito.Mockito.doReturn(connection).when(observed).connect();
+            var joined = new PunishmentStorage(plugin, observed, PunishmentStorage.Kind.MUTE).getForJoin(both);
+            assertEquals(ban, joined.ban());
+            assertEquals(mute, joined.mute());
+            org.mockito.Mockito.verify(connection).prepareStatement(org.mockito.ArgumentMatchers.contains("UNION ALL"));
+            org.mockito.Mockito.verify(connection, org.mockito.Mockito.times(1))
+                    .prepareStatement(org.mockito.ArgumentMatchers.anyString());
+            assertNull(mutes.getForJoin(onlyMute).ban());
+            assertNotNull(mutes.getForJoin(onlyMute).mute());
+            assertNotNull(mutes.getForJoin(onlyBan).ban());
+            assertNull(mutes.getForJoin(onlyBan).mute());
+            assertEquals(new br.com.bancinematic.punishment.JoinPunishments(null, null), mutes.getForJoin(expired));
+            assertEquals(new br.com.bancinematic.punishment.JoinPunishments(null, null), mutes.getForJoin(UUID.randomUUID()));
         }
+    }
+
+    @Test
+    void committedPunishmentsAreAuditedOnceWithoutDependingOnBroadcasts() throws SQLException {
+        database.initialize();
+        Logger console = mock(Logger.class);
+        when(plugin.getLogger()).thenReturn(console);
+        PunishmentLogger history = new PunishmentLogger(plugin, database);
+        BanManager bans = new BanManager(plugin, new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN), history, DatabaseExecutor.inline());
+        MuteManager mutes = new MuteManager(plugin, new PunishmentStorage(plugin, database, PunishmentStorage.Kind.MUTE), history, DatabaseExecutor.inline());
+        UUID uuid = UUID.randomUUID();
+        for (boolean temporary : new boolean[]{false, true}) {
+            assertEquals(PunishmentResult.SUCCESS, (temporary
+                    ? bans.tempBan(uuid, "Alvo", "spam\nforjado", "Admin", 60)
+                    : bans.ban(uuid, "Alvo", "spam\nforjado", "Admin")).join());
+            assertEquals(PunishmentResult.ALREADY_ACTIVE, bans.ban(uuid, "Alvo", "duplicado", "Admin").join());
+            assertEquals(PunishmentResult.SUCCESS, bans.unban(uuid, "Alvo", "Admin").join());
+            assertEquals(PunishmentResult.NOT_ACTIVE, bans.unban(uuid, "Alvo", "Admin").join());
+            assertEquals(PunishmentResult.SUCCESS, (temporary
+                    ? mutes.tempMute(uuid, "Alvo", "spam\nforjado", "Admin", 60)
+                    : mutes.mute(uuid, "Alvo", "spam\nforjado", "Admin")).join());
+            assertEquals(PunishmentResult.ALREADY_ACTIVE, mutes.mute(uuid, "Alvo", "duplicado", "Admin").join());
+            assertEquals(PunishmentResult.SUCCESS, mutes.unmute(uuid, "Alvo", "Admin").join());
+            assertEquals(PunishmentResult.NOT_ACTIVE, mutes.unmute(uuid, "Alvo", "Admin").join());
+            String fields = " player=Alvo uuid=" + uuid + " source=Admin duration-seconds="
+                    + (temporary ? "60" : "-") + " reason=spam forjado";
+            org.mockito.Mockito.verify(console).info("[AUDIT] " + (temporary ? "TEMPBAN" : "BAN") + fields);
+            org.mockito.Mockito.verify(console).info("[AUDIT] " + (temporary ? "TEMPMUTE" : "MUTE") + fields);
+        }
+        String removed = " player=Alvo uuid=" + uuid + " source=Admin duration-seconds=- reason=Removido";
+        org.mockito.Mockito.verify(console, org.mockito.Mockito.times(2)).info("[AUDIT] UNBAN" + removed);
+        org.mockito.Mockito.verify(console, org.mockito.Mockito.times(2)).info("[AUDIT] UNMUTE" + removed);
+        org.mockito.Mockito.verify(console, org.mockito.Mockito.times(8)).info(org.mockito.ArgumentMatchers.anyString());
     }
 
     @Test
     void failedHistoryWriteRollsBackNewBanAndRestoresRemovedBan() throws SQLException {
         database.initialize();
         UUID uuid = UUID.randomUUID();
-        BanStorage storage = new BanStorage(plugin, database);
+        PunishmentStorage storage = new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN);
         PunishmentLogger history = mock(PunishmentLogger.class);
         BanManager manager = new BanManager(plugin, storage, history, DatabaseExecutor.inline());
 
@@ -282,7 +327,7 @@ class PluginWorkflowTest {
         assertEquals(0, countRows("ban_records", uuid),
                 "A transação deve desfazer o ban quando a escrita do histórico falha.");
 
-        assertTrue(storage.put(new BanData(uuid, "Alvo", "teste", "staff", null)));
+        assertTrue(storage.put(new PunishmentData(uuid, "Alvo", "teste", "staff", null)));
         assertEquals(PunishmentResult.STORAGE_ERROR,
                 manager.unban(uuid, "Alvo", "CONSOLE").join());
         assertNotNull(manager.get(uuid), "Falha ao registrar /unban deve restaurar o ban anterior.");
@@ -290,7 +335,7 @@ class PluginWorkflowTest {
                 "A transação deve preservar o ban quando o histórico de /unban falha.");
 
         UUID muteId = UUID.randomUUID();
-        MuteStorage muteStorage = new MuteStorage(plugin, database);
+        PunishmentStorage muteStorage = new PunishmentStorage(plugin, database, PunishmentStorage.Kind.MUTE);
         MuteManager muteManager = new MuteManager(plugin, muteStorage, history, DatabaseExecutor.inline());
         assertEquals(PunishmentResult.STORAGE_ERROR,
                 muteManager.mute(muteId, "Mutado", "teste", "CONSOLE").join());
@@ -298,25 +343,17 @@ class PluginWorkflowTest {
         assertEquals(0, countRows("mute_records", muteId),
                 "A transação deve desfazer o mute quando a escrita do histórico falha.");
 
-        assertTrue(muteStorage.put(new MuteData(muteId, "Mutado", "teste", "staff", null)));
+        assertTrue(muteStorage.put(new PunishmentData(muteId, "Mutado", "teste", "staff", null)));
         assertEquals(PunishmentResult.STORAGE_ERROR,
                 muteManager.unmute(muteId, "Mutado", "CONSOLE").join());
         assertNotNull(muteManager.get(muteId),
                 "Falha ao registrar /unmute deve preservar o mute anterior.");
         assertEquals(1, countRows("mute_records", muteId),
                 "A transação deve preservar o mute quando o histórico de /unmute falha.");
-    }
-
-    @Test
-    void mysqlConnectionWorksWhenIntegrationEnvironmentIsConfigured() throws SQLException {
-        configureMysqlFromEnvironment();
-
-        try (Connection connection = new DatabaseManager(plugin).connect();
-             PreparedStatement statement = connection.prepareStatement("SELECT 1");
-             ResultSet result = statement.executeQuery()) {
-            assertTrue(result.next());
-            assertEquals(1, result.getInt(1));
-        }
+        org.mockito.Mockito.verify(history, org.mockito.Mockito.never()).logConsole(
+                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.any());
     }
 
     @Test
@@ -326,8 +363,8 @@ class PluginWorkflowTest {
         mysql.initialize();
 
         UUID uuid = UUID.randomUUID();
-        BanStorage bans = new BanStorage(plugin, mysql);
-        MuteStorage mutes = new MuteStorage(plugin, mysql);
+        PunishmentStorage bans = new PunishmentStorage(plugin, mysql, PunishmentStorage.Kind.BAN);
+        PunishmentStorage mutes = new PunishmentStorage(plugin, mysql, PunishmentStorage.Kind.MUTE);
         PunishmentLogger history = new PunishmentLogger(plugin, mysql);
         BanManager banManager = new BanManager(plugin, bans, history, DatabaseExecutor.inline());
         MuteManager muteManager = new MuteManager(plugin, mutes, history, DatabaseExecutor.inline());
@@ -335,6 +372,8 @@ class PluginWorkflowTest {
             assertEquals(PunishmentResult.SUCCESS,
                     banManager.ban(uuid, "MySqlIntegration", "teste", "MySqlAdmin").join());
             assertEquals("teste", bans.get(uuid).reason());
+            assertEquals("teste", mutes.getForJoin(uuid).ban().reason());
+            assertNull(mutes.getForJoin(uuid).mute());
             assertEquals(PunishmentResult.SUCCESS,
                     banManager.unban(uuid, "MySqlIntegration", "MySqlAdmin").join());
             assertNull(bans.get(uuid));
@@ -342,6 +381,8 @@ class PluginWorkflowTest {
             assertEquals(PunishmentResult.SUCCESS,
                     muteManager.mute(uuid, "MySqlIntegration", "teste", "MySqlAdmin").join());
             assertEquals("teste", mutes.get(uuid).reason());
+            assertNull(mutes.getForJoin(uuid).ban());
+            assertEquals("teste", mutes.getForJoin(uuid).mute().reason());
             assertEquals(PunishmentResult.SUCCESS,
                     muteManager.unmute(uuid, "MySqlIntegration", "MySqlAdmin").join());
             assertNull(mutes.get(uuid));

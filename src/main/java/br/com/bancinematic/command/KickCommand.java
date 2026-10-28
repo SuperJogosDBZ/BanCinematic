@@ -62,13 +62,13 @@ public final class KickCommand implements CommandExecutor {
                 "messages.kick-screen", reason, sourceName, targetName, ""
         );
         target.kick(plugin.messages().component(finalMessage));
+        logger.logConsole(PunishmentType.KICK, uuid, targetName, reason, sourceName, null);
         plugin.broadcastPunishment("messages.broadcast.kick", targetName, reason, sourceName, "");
         String confirmation = plugin.messages().get("messages.confirmations.kick")
                 .replace("%player%", targetName)
                 .replace("%reason%", reason);
         sender.sendMessage(plugin.messages().component(confirmation));
 
-        // A fila e falhas do histórico não podem impedir a expulsão.
         plugin.databaseExecutor()
                 .submit(() -> logger.log(PunishmentType.KICK, uuid, targetName, reason, sourceName, null))
                 .whenComplete((saved, error) -> {

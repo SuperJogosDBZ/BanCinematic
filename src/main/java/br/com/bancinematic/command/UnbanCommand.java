@@ -34,7 +34,7 @@ public final class UnbanCommand implements CommandExecutor, TabCompleter {
             return ban == null ? null : ban.name();
         }), target -> {
             if (target == null) {
-                sender.sendMessage(plugin.messages().get("messages.already-unbanned"));
+                sender.sendMessage(plugin.messages().get("messages.player-never-joined"));
                 return;
             }
             UUID uuid = target.uuid();

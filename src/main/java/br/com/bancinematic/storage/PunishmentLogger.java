@@ -27,6 +27,14 @@ public final class PunishmentLogger {
         this.database = database;
     }
 
+    public void logConsole(PunishmentType type, UUID playerId, String player,
+                           String reason, String source, Long durationSeconds) {
+        String message = "[AUDIT] " + type + " player=" + player + " uuid=" + playerId
+                + " source=" + source + " duration-seconds=" + (durationSeconds == null ? "-" : durationSeconds)
+                + " reason=" + reason;
+        plugin.getLogger().info(message.replaceAll("[\\p{Cntrl}\\p{Zl}\\p{Zp}]", " "));
+    }
+
     public boolean log(PunishmentType type, UUID playerId, String player,
                        String reason, String source, Long durationSeconds) {
         Objects.requireNonNull(playerId, "A UUID do jogador é obrigatória no histórico.");

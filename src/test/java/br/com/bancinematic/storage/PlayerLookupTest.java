@@ -67,69 +67,63 @@ class PlayerLookupTest {
     }
 
     @Test
-    void joinPreparationDisconnectsOnEitherBanOrMuteLookupFailure() {
-        for (boolean failBan : new boolean[]{true, false}) {
-            var plugin = plugin(DatabaseExecutor.inline());
-            var bans = mock(BanManager.class);
-            var mutes = mock(MuteManager.class);
-            var player = mock(Player.class);
-            UUID id = UUID.randomUUID();
-            when(player.getUniqueId()).thenReturn(id);
-            when(player.isOnline()).thenReturn(true);
-            var event = mock(PlayerJoinEvent.class);
-            when(event.getPlayer()).thenReturn(player);
-            if (failBan) when(bans.get(id)).thenThrow(new IllegalStateException("offline"));
-            else when(mutes.loadOnline(id)).thenReturn(CompletableFuture.failedFuture(new IllegalStateException("offline")));
-
-            new MuteJoinListener(plugin, bans, mutes).onJoin(event);
-
-            verify(player).kick(plugin.messages().component("UNAVAILABLE"));
-            if (failBan) verifyNoInteractions(mutes);
-        }
-    }
-
-    @Test
-    void leavingBeforeBanLookupFinishesDoesNotStartMuteLoading() {
-        var executor = mock(DatabaseExecutor.class);
-        var result = new CompletableFuture<BanData>();
-        when(executor.<BanData>submit(any())).thenReturn(result);
-        var plugin = plugin(executor);
-        var mutes = mock(MuteManager.class);
-        var player = mock(Player.class);
-        when(player.getUniqueId()).thenReturn(UUID.randomUUID());
-        var event = mock(PlayerJoinEvent.class);
-        when(event.getPlayer()).thenReturn(player);
-
-        new MuteJoinListener(plugin, mock(BanManager.class), mutes).onJoin(event);
-        result.complete(null);
-
-        verifyNoInteractions(mutes);
-        verify(player, never()).kick(any(net.kyori.adventure.text.Component.class));
-    }
-
-    @Test
-    void leavingDuringMuteLookupDoesNotSendLateReminder() {
+    void joinPreparationDisconnectsOnCombinedLookupFailure() {
         var plugin = plugin(DatabaseExecutor.inline());
         var mutes = mock(MuteManager.class);
-        var result = new CompletableFuture<MuteData>();
         var player = mock(Player.class);
         UUID id = UUID.randomUUID();
         when(player.getUniqueId()).thenReturn(id);
         when(player.isOnline()).thenReturn(true);
-        when(mutes.loadOnline(id)).thenReturn(result);
         var event = mock(PlayerJoinEvent.class);
         when(event.getPlayer()).thenReturn(player);
-        var listener = new MuteJoinListener(plugin, mock(BanManager.class), mutes);
-        listener.onJoin(event);
+        when(mutes.loadForJoin(id)).thenReturn(CompletableFuture.failedFuture(new IllegalStateException("offline")));
+        new MuteJoinListener(plugin, mutes).onJoin(event);
+        verify(player).kick(plugin.messages().component("UNAVAILABLE"));
+        verify(mutes, never()).getOnline(any());
+    }
 
+    @Test
+    void joinRechecksBanAndDoesNotSendMuteReminderToBannedPlayer() {
+        var plugin = plugin(DatabaseExecutor.inline());
+        var mutes = mock(MuteManager.class);
+        var player = mock(Player.class);
+        UUID id = UUID.randomUUID();
+        when(player.getUniqueId()).thenReturn(id);
+        when(player.getName()).thenReturn("Alvo");
+        when(player.isOnline()).thenReturn(true);
+        var event = mock(PlayerJoinEvent.class);
+        when(event.getPlayer()).thenReturn(player);
+        when(mutes.loadForJoin(id)).thenReturn(CompletableFuture.completedFuture(new JoinPunishments(
+                new PunishmentData(id, "Alvo", "ban", "A", null), new PunishmentData(id, "Alvo", "mute", "A", null))));
+        new MuteJoinListener(plugin, mutes).onJoin(event);
+        verify(player).kick(any(net.kyori.adventure.text.Component.class));
+        verify(mutes, never()).getOnline(any());
+        verify(mutes, never()).muteReminder(any());
+    }
+
+    @Test
+    void leavingDuringCombinedLookupDoesNotSendLateReminderOrKick() {
+        var plugin = plugin(DatabaseExecutor.inline());
+        var mutes = mock(MuteManager.class);
+        var result = new CompletableFuture<JoinPunishments>();
+        var player = mock(Player.class);
+        UUID id = UUID.randomUUID();
+        when(player.getUniqueId()).thenReturn(id);
+        when(player.isOnline()).thenReturn(true);
+        when(mutes.loadForJoin(id)).thenReturn(result);
+        var event = mock(PlayerJoinEvent.class);
+        when(event.getPlayer()).thenReturn(player);
+        var listener = new MuteJoinListener(plugin, mutes);
+        listener.onJoin(event);
         when(player.isOnline()).thenReturn(false);
         var quit = mock(PlayerQuitEvent.class);
         when(quit.getPlayer()).thenReturn(player);
         listener.onQuit(quit);
-        result.complete(new MuteData(id, "Alvo", "reason", "A", null));
-
+        result.complete(new JoinPunishments(null, new PunishmentData(id, "Alvo", "reason", "A", null)));
         verify(mutes).forgetOnline(id);
+        verify(mutes, never()).getOnline(any());
         verify(mutes, never()).muteReminder(any());
+        verify(player, never()).kick(any(net.kyori.adventure.text.Component.class));
         verify(player, never()).sendMessage(anyString());
     }
 
@@ -139,16 +133,15 @@ class PlayerLookupTest {
         try (var database = spy(new DatabaseManager(plugin))) {
             database.initialize();
             clearInvocations(database);
-            var bans = new BanStorage(plugin, database);
-            var mutes = new MuteStorage(plugin, database);
+            var bans = new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN);
+            var mutes = new PunishmentStorage(plugin, database, PunishmentStorage.Kind.MUTE);
             var identities = new IdentityStorage(plugin, database);
             verify(database, never()).execute(any());
-            assertEquals(0, identities.cachedCount());
             UUID id = UUID.randomUUID();
             try (var remote = new DatabaseManager(plugin)) {
-                assertTrue(new BanStorage(plugin, remote).put(new BanData(id, "Alvo", "remote", "A", null)));
+                assertTrue(new PunishmentStorage(plugin, remote, PunishmentStorage.Kind.BAN).put(new PunishmentData(id, "Alvo", "remote", "A", null)));
                 assertEquals("remote", bans.get(id).reason());
-                assertTrue(new MuteStorage(plugin, remote).put(new MuteData(id, "Alvo", "remote", "A", null)));
+                assertTrue(new PunishmentStorage(plugin, remote, PunishmentStorage.Kind.MUTE).put(new PunishmentData(id, "Alvo", "remote", "A", null)));
                 assertEquals("remote", mutes.get(id).reason());
             }
         }
@@ -174,7 +167,7 @@ class PlayerLookupTest {
                 }
                 return null;
             });
-            var bans = new BanStorage(plugin, database);
+            var bans = new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN);
             assertEquals(204, bans.find(ids).size());
             var selected = bans.find(List.of(ids.get(0), ids.get(202), UUID.randomUUID()));
             assertEquals(Set.of(ids.get(0), ids.get(202)), selected.keySet());
@@ -183,31 +176,26 @@ class PlayerLookupTest {
     }
 
     @Test
-    void identityCacheIsBoundedAndEvictedNamesRemainResolvableFromSql() throws Exception {
+    void identityLookupsSeeRemoteReassignmentAndDeletionImmediately() throws Exception {
         var plugin = plugin(DatabaseExecutor.inline());
-        try (var database = new DatabaseManager(plugin)) {
+        try (var database = new DatabaseManager(plugin); var remote = new DatabaseManager(plugin)) {
             database.initialize();
-            UUID id = UUID.randomUUID();
-            database.transaction(connection -> {
-                try (var statement = connection.prepareStatement("INSERT INTO player_names VALUES (?, ?, ?, ?)")) {
-                    for (int i = 0; i < 1200; i++) {
-                        statement.setString(1, "player" + i);
-                        statement.setString(2, id.toString());
-                        statement.setString(3, "Player" + i);
-                        statement.setLong(4, 1000);
-                        statement.addBatch();
-                    }
-                    statement.executeBatch();
+            var names = new IdentityStorage(plugin, database);
+            var remoteNames = new IdentityStorage(plugin, remote);
+            UUID first = UUID.randomUUID(), second = UUID.randomUUID();
+            assertNull(names.get("Alvo"));
+            assertTrue(remoteNames.record(first, "Alvo"));
+            assertEquals(first, names.resolve("ALVO"));
+            assertTrue(remoteNames.record(second, "Alvo"));
+            assertEquals(second, names.resolve("alvo"));
+            remote.execute(connection -> {
+                try (var statement = connection.prepareStatement("DELETE FROM player_names WHERE normalized_name = ?")) {
+                    statement.setString(1, "alvo");
+                    statement.executeUpdate();
                 }
                 return null;
             });
-            var names = new IdentityStorage(plugin, database);
-            for (int i = 0; i < 1200; i++) assertEquals(id, names.resolve("Player" + i));
-            assertEquals(1024, names.cachedCount());
-            assertEquals(id, names.resolve("PLAYER0"));
-            names.invalidate();
-            assertEquals(0, names.cachedCount());
-            assertEquals(id, names.resolve("Player1199"));
+            assertNull(names.get("Alvo"));
         }
     }
 
@@ -220,11 +208,11 @@ class PlayerLookupTest {
         when(event.getUniqueId()).thenReturn(id);
         when(event.getLoginResult()).thenReturn(AsyncPlayerPreLoginEvent.Result.ALLOWED);
         when(bans.get(id)).thenThrow(new IllegalStateException("SQL unavailable"));
-        new BanLoginListener(plugin, bans).onLogin(event);
+        new BanLoginListener(plugin, () -> bans).onLogin(event);
         verify(event).disallow(eq(AsyncPlayerPreLoginEvent.Result.KICK_OTHER), any(net.kyori.adventure.text.Component.class));
         clearInvocations(bans);
         when(event.getLoginResult()).thenReturn(AsyncPlayerPreLoginEvent.Result.KICK_WHITELIST);
-        new BanLoginListener(plugin, bans).onLogin(event);
+        new BanLoginListener(plugin, () -> bans).onLogin(event);
         verifyNoInteractions(bans);
     }
 
@@ -249,7 +237,7 @@ class PlayerLookupTest {
             var event = mock(AsyncPlayerPreLoginEvent.class);
             when(event.getLoginResult()).thenReturn(AsyncPlayerPreLoginEvent.Result.ALLOWED);
             try {
-                new BanLoginListener(plugin, bans).onLogin(event);
+                new BanLoginListener(plugin, () -> bans).onLogin(event);
                 verify(event).disallow(eq(AsyncPlayerPreLoginEvent.Result.KICK_OTHER), any(net.kyori.adventure.text.Component.class));
             } finally { release.countDown(); }
             executor.execute(() -> {}).get(5, TimeUnit.SECONDS);
@@ -278,19 +266,42 @@ class PlayerLookupTest {
     }
 
     @Test
+    void combinedLoadKeepsChatBlockedForBansAndDoesNotOverwriteNewerLocalMutes() {
+        var executor = mock(DatabaseExecutor.class);
+        var plugin = plugin(executor);
+        var storage = mock(PunishmentStorage.class);
+        var manager = new MuteManager(plugin, storage, mock(PunishmentLogger.class), executor);
+        UUID id = UUID.randomUUID();
+        var banned = new CompletableFuture<JoinPunishments>();
+        var stale = new CompletableFuture<JoinPunishments>();
+        when(executor.<JoinPunishments>submit(any())).thenReturn(banned, stale);
+        manager.loadForJoin(id);
+        assertFalse(manager.isLoaded(id));
+        banned.complete(new JoinPunishments(new PunishmentData(id, "Alvo", "ban", "A", null), null));
+        assertFalse(manager.isLoaded(id), "Ban no join não pode liberar o chat antes do kick.");
+        manager.forgetOnline(id);
+        manager.loadForJoin(id);
+        PunishmentData current = new PunishmentData(id, "Alvo", "new", "A", null);
+        manager.updateOnline(id, current);
+        stale.complete(new JoinPunishments(null, null));
+        assertTrue(manager.isLoaded(id));
+        assertEquals(current, manager.getOnline(id));
+    }
+
+    @Test
     void muteCacheDoesNotGrowWithOfflinePunishmentsAndQuitDiscardsPendingLoads() throws Exception {
         CountDownLatch first = new CountDownLatch(1), second = new CountDownLatch(1), started = new CountDownLatch(1);
         try (var executor = DatabaseExecutor.create()) {
             var plugin = plugin(executor);
-            var storage = mock(MuteStorage.class);
+            var storage = mock(PunishmentStorage.class);
             var manager = new MuteManager(plugin, storage, mock(PunishmentLogger.class), executor);
             UUID id = UUID.randomUUID();
-            when(storage.get(id)).thenAnswer(call -> { started.countDown(); await(first); return new MuteData(id, "Alvo", "old", "A", null); })
-                    .thenAnswer(call -> { await(second); return null; });
-            var old = manager.loadOnline(id);
+            when(storage.getForJoin(id)).thenAnswer(call -> { started.countDown(); await(first); return new JoinPunishments(null, new PunishmentData(id, "Alvo", "old", "A", null)); })
+                    .thenAnswer(call -> { await(second); return new JoinPunishments(null, null); });
+            var old = manager.loadForJoin(id);
             assertTrue(started.await(5, TimeUnit.SECONDS));
             manager.forgetOnline(id);
-            var current = manager.loadOnline(id);
+            var current = manager.loadForJoin(id);
             try {
                 first.countDown();
                 old.get(5, TimeUnit.SECONDS);
@@ -300,7 +311,7 @@ class PlayerLookupTest {
             current.get(5, TimeUnit.SECONDS);
             assertTrue(manager.isLoaded(id));
             when(storage.revision()).thenReturn(1L);
-            var stale = new MuteData(id, "Alvo", "stale sync", "A", null);
+            var stale = new PunishmentData(id, "Alvo", "stale sync", "A", null);
             manager.updateOnlineFromSync(id, stale, 0L);
             assertNull(manager.getOnline(id), "Sincronização antiga não pode restaurar um mute removido localmente.");
             manager.updateOnlineFromSync(id, stale, 1L);
@@ -340,7 +351,7 @@ class PlayerLookupTest {
         var plugin = plugin(DatabaseExecutor.inline());
         try (var database = new DatabaseManager(plugin)) {
             database.initialize();
-            var bans = new BanStorage(plugin, database);
+            var bans = new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN);
             database.transaction(connection -> {
                 try (var statement = connection.prepareStatement("INSERT INTO ban_records VALUES (?, ?, 'reason', 'A', NULL)")) {
                     for (int i = 0; i < 130; i++) {

@@ -1,3 +1,187 @@
+package br.com.bancinematic;
+
+import br.com.bancinematic.cinematic.BanCinematic;
+import br.com.bancinematic.cinematic.CinematicSession;
+import br.com.bancinematic.cinematic.CinematicSettings;
+import br.com.bancinematic.command.BanCommand;
+import br.com.bancinematic.command.KickCommand;
+import br.com.bancinematic.command.HistoryCommand;
+import br.com.bancinematic.command.MuteCommand;
+import br.com.bancinematic.command.TempBanCommand;
+import br.com.bancinematic.command.TempMuteCommand;
+import br.com.bancinematic.command.UnbanCommand;
+import br.com.bancinematic.command.UnmuteCommand;
+import br.com.bancinematic.listener.BanLoginListener;
+import br.com.bancinematic.listener.ChatListener;
+import br.com.bancinematic.listener.MuteJoinListener;
+import br.com.bancinematic.listener.PlayerIdentityListener;
+import br.com.bancinematic.punishment.BanManager;
+import br.com.bancinematic.punishment.PunishmentData;
+import br.com.bancinematic.punishment.MuteManager;
+import br.com.bancinematic.punishment.PunishmentResult;
+import br.com.bancinematic.storage.PunishmentStorage;
+import br.com.bancinematic.storage.DatabaseExecutor;
+import br.com.bancinematic.storage.DatabaseManager;
+import br.com.bancinematic.storage.IdentityStorage;
+import br.com.bancinematic.storage.PunishmentLogger;
+import br.com.bancinematic.util.MessageUtil;
+import org.bukkit.Bukkit;
+import org.bukkit.Location;
+import org.bukkit.Server;
+import org.bukkit.command.Command;
+import org.bukkit.command.CommandSender;
+import org.bukkit.command.ConsoleCommandSender;
+import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.entity.Player;
+import org.bukkit.event.player.AsyncPlayerChatEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.AsyncPlayerPreLoginEvent;
+import org.bukkit.scheduler.BukkitScheduler;
+import org.bukkit.scheduler.BukkitTask;
+import org.bukkit.plugin.PluginDescriptionFile;
+import org.bukkit.plugin.PluginManager;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Instant;
+import java.util.List;
+import java.util.UUID;
+import java.util.logging.Logger;
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.mockingDetails;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.doCallRealMethod;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+class RuntimeFlowTest {
+    @TempDir
+    Path temporaryDirectory;
+
+    private BanCinematicPlugin plugin;
+    private DatabaseManager database;
+    private IdentityStorage identities;
+    private YamlConfiguration config;
+
+    @BeforeEach
+    void setUp() throws Exception {
+        plugin = mock(BanCinematicPlugin.class);
+        var dataFolder = Files.createDirectories(temporaryDirectory.resolve("plugin-data")).toFile();
+        config = loadTestLanguageConfig();
+        config.set("database.type", "SQLITE");
+        config.set("messages.player-never-joined", "NEVER_JOINED");
+        config.set("messages.ban-started", "BAN_STARTED:%player%");
+        config.set("messages.already-banned", "ALREADY_BANNED");
+        config.set("messages.storage-error", "STORAGE_ERROR");
+        config.set("messages.unbanned", "UNBANNED:%player%");
+        config.set("messages.invalid-time", "INVALID_TIME");
+        config.set("messages.temp-muted", "TEMPMUTED:%player%:%time%:%reason%");
+        config.set("messages.usage-tempmute", "USAGE_TEMPMUTE");
+        config.set("messages.not-muted", "NOT_MUTED");
+        config.set("messages.unmuted", "UNMUTED:%player%");
+        config.set("messages.muted-chat", "MUTED:%reason%:%time%");
+        config.set("messages.tempmute-notice", "NOTICE:%reason%:%time%");
+        config.set("messages.mute-reminder", "REMINDER:%reason%:%time%");
+        config.set("messages.tempban-screen.title", "BAN_SCREEN");
+        when(plugin.getConfig()).thenReturn(config);
+        when(plugin.getLanguageConfig()).thenReturn(config);
+        when(plugin.getDataFolder()).thenReturn(dataFolder);
+        when(plugin.getLogger()).thenReturn(Logger.getLogger("BanCinematic-runtime-test"));
+        when(plugin.messages()).thenReturn(new MessageUtil(plugin));
+
+        database = new DatabaseManager(plugin);
+        database.initialize();
+        identities = new IdentityStorage(plugin, database);
+        when(plugin.identities()).thenReturn(identities);
+        when(plugin.databaseExecutor()).thenReturn(DatabaseExecutor.inline());
+        doAnswer(invocation -> {
+            invocation.<Runnable>getArgument(0).run();
+            return null;
+        }).when(plugin).runSync(any(Runnable.class));
+    }
+
+    private YamlConfiguration loadTestLanguageConfig() throws Exception {
+        try (var input = getClass().getClassLoader().getResourceAsStream("language_br.yml")) {
+            assertNotNull(input, "language_br.yml deve estar disponível nos recursos de teste.");
+            return YamlConfiguration.loadConfiguration(new java.io.InputStreamReader(
+                    input, java.nio.charset.StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
+    void joinRecordsIdentityAndBanThenLoginThenUnbanWorkInSequence() {
+        UUID uuid = UUID.randomUUID();
+        Player player = mock(Player.class);
+        when(player.getUniqueId()).thenReturn(uuid);
+        when(player.getName()).thenReturn("Taupaipai");
+        PlayerJoinEvent joinEvent = mock(PlayerJoinEvent.class);
+        when(joinEvent.getPlayer()).thenReturn(player);
+
+        new PlayerIdentityListener(plugin).onJoin(joinEvent);
+        assertTrue(uuid.equals(identities.resolve("taupaipai")));
+
+        PunishmentStorage storage = new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN);
+        PunishmentLogger history = new PunishmentLogger(plugin, database);
+        BanManager manager = new BanManager(plugin, storage, history, DatabaseExecutor.inline());
+        CommandSender sender = mock(CommandSender.class);
+        when(sender.getName()).thenReturn("console");
+        Command command = mock(Command.class);
+        BanCinematic cinematic = mock(BanCinematic.class);
+
+        try (var bukkit = mockStatic(Bukkit.class)) {
+            bukkit.when(() -> Bukkit.getPlayer(uuid)).thenReturn(null);
+            new BanCommand(plugin, manager, cinematic).onCommand(
+                    sender, command, "ban", new String[]{"taupaipai", "cheating"});
+        }
+        assertNotNull(manager.get(uuid), "Ban offline deve ser persistido pela UUID conhecida.");
+        verify(cinematic, never()).start(any(), any(), anyString(), any());
+
+        AsyncPlayerPreLoginEvent loginEvent = mock(AsyncPlayerPreLoginEvent.class);
+        when(loginEvent.getUniqueId()).thenReturn(uuid);
+        when(loginEvent.getLoginResult()).thenReturn(AsyncPlayerPreLoginEvent.Result.ALLOWED);
+        when(loginEvent.getName()).thenReturn("Taupaipai");
+        new BanLoginListener(plugin, () -> manager).onLogin(loginEvent);
+        verify(loginEvent).disallow(eq(AsyncPlayerPreLoginEvent.Result.KICK_BANNED), any(net.kyori.adventure.text.Component.class));
+
+        assertTrue(new UnbanCommand(plugin, manager, cinematic).onCommand(
+                sender, command, "unban", new String[]{"Taupaipai"}));
+        assertNull(manager.get(uuid), "Após /unban, o jogador não deve mais ser bloqueado.");
+    }
+
+    @Test
+    void cinematicUsesTheReconnectedPlayerAfterTheAsynchronousBanWrite() {
+        UUID uuid = UUID.randomUUID();
+        Player oldTarget = mock(Player.class);
+        when(oldTarget.getUniqueId()).thenReturn(uuid);
+        when(oldTarget.getName()).thenReturn("Alvo");
+        when(oldTarget.isOnline()).thenReturn(false);
+        Player currentTarget = mock(Player.class);
+        when(currentTarget.getUniqueId()).thenReturn(uuid);
+        when(currentTarget.getName()).thenReturn("Alvo");
+        when(currentTarget.isOnline()).thenReturn(true);
+        CommandSender source = mock(CommandSender.class);
+        when(source.getName()).thenReturn("console");
+        config.set("cinematic.enabled", false);
+        configureCinematicConstruction();
+        BanManager manager = new BanManager(plugin, new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN),
+                new PunishmentLogger(plugin, database), DatabaseExecutor.inline());
+        BukkitScheduler scheduler = mock(BukkitScheduler.class);
+        BukkitTask task = mock(BukkitTask.class);
 
         try (var bukkit = mockStatic(Bukkit.class)) {
             bukkit.when(() -> Bukkit.getPlayer(uuid)).thenReturn(currentTarget);
@@ -23,7 +207,7 @@
         CommandSender source = mock(CommandSender.class);
         when(source.getName()).thenReturn("console");
         configureCinematicConstruction();
-        BanManager manager = new BanManager(plugin, new BanStorage(plugin, database),
+        BanManager manager = new BanManager(plugin, new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN),
                 new PunishmentLogger(plugin, database), DatabaseExecutor.inline());
 
         try (var bukkit = mockStatic(Bukkit.class)) {
@@ -51,7 +235,7 @@
     void unbanIsBlockedWhileBanCinematicIsStillRunning() {
         UUID uuid = UUID.randomUUID();
         identities.record(uuid, "EmBan");
-        BanStorage storage = new BanStorage(plugin, database);
+        PunishmentStorage storage = new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN);
         PunishmentLogger history = new PunishmentLogger(plugin, database);
         BanManager manager = new BanManager(plugin, storage, history, DatabaseExecutor.inline());
         CommandSender sender = mock(CommandSender.class);
@@ -71,7 +255,7 @@
     void tempmuteJoinReminderChatBlockAndUnmuteWorkInSequence() {
         UUID uuid = UUID.randomUUID();
         identities.record(uuid, "Mutado");
-        MuteStorage storage = new MuteStorage(plugin, database);
+        PunishmentStorage storage = new PunishmentStorage(plugin, database, PunishmentStorage.Kind.MUTE);
         PunishmentLogger history = new PunishmentLogger(plugin, database);
         MuteManager manager = new MuteManager(plugin, storage, history, DatabaseExecutor.inline());
         CommandSender sender = mock(CommandSender.class);
@@ -86,7 +270,7 @@
         assertEquals("spam", manager.get(uuid).reason());
         assertNotNull(manager.get(uuid).expires(), "Tempmute deve salvar a expiração.");
         assertTrue(manager.get(uuid).expires().isAfter(Instant.now()));
-        assertNotNull(new MuteStorage(plugin, database).get(uuid).expires(),
+        assertNotNull(new PunishmentStorage(plugin, database, PunishmentStorage.Kind.MUTE).get(uuid).expires(),
                 "A expiração do tempmute deve sobreviver ao reload do armazenamento.");
         assertNotNull(manager.get(uuid));
 
@@ -95,7 +279,7 @@
         when(player.isOnline()).thenReturn(true);
         PlayerJoinEvent joinEvent = mock(PlayerJoinEvent.class);
         when(joinEvent.getPlayer()).thenReturn(player);
-        new MuteJoinListener(plugin, new BanManager(plugin, new BanStorage(plugin, database), history, DatabaseExecutor.inline()), manager).onJoin(joinEvent);
+        new MuteJoinListener(plugin, manager).onJoin(joinEvent);
         verify(player).sendMessage(contains("REMINDER:spam:"));
 
         AsyncPlayerChatEvent chatEvent = mock(AsyncPlayerChatEvent.class);
@@ -263,10 +447,12 @@
     @SuppressWarnings("unchecked")
     private void verifyCinematicCleanupWithRegistries(boolean quit) throws Exception {
         configureCinematicConstruction();
-        BanCinematic cinematic = new BanCinematic(plugin, mock(BanManager.class));
+        BanManager manager = mock(BanManager.class);
+        BanCinematic cinematic = new BanCinematic(plugin, manager);
         Player player = mock(Player.class);
         UUID uuid = UUID.randomUUID();
         when(player.getUniqueId()).thenReturn(uuid);
+        when(player.getName()).thenReturn("Alvo");
         when(player.getGameMode()).thenReturn(org.bukkit.GameMode.SURVIVAL);
         when(player.isInvulnerable()).thenReturn(false);
         when(player.isCollidable()).thenReturn(true);
@@ -291,6 +477,8 @@
         if (quit) {
             cinematic.onQuit(new org.bukkit.event.player.PlayerQuitEvent(player,
                     net.kyori.adventure.text.Component.text("quit")));
+            cinematic.onQuit(new org.bukkit.event.player.PlayerQuitEvent(player,
+                    net.kyori.adventure.text.Component.text("quit")));
             verify(player, never()).setGameMode(any());
             when(data.get(any(org.bukkit.NamespacedKey.class), eq(org.bukkit.persistence.PersistentDataType.STRING)))
                     .thenReturn("SURVIVAL;false;true");
@@ -310,6 +498,54 @@
         cinematic.shutdown();
         verify(monster).remove();
         verify(task).cancel();
+        if (quit) {
+            verify(manager).announceBan("Alvo", "regra", "CONSOLE", null);
+            verify(manager).sendBanConfirmation(session.source(), "Alvo", "regra", null);
+        } else {
+            org.mockito.Mockito.verifyNoInteractions(manager);
+        }
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void normalCinematicKickDoesNotDuplicateAnnouncementsWhenQuitIsFired() throws Exception {
+        try (var registries = mockPaperRegistries(); var bukkit = mockStatic(Bukkit.class)) {
+            configureCinematicConstruction();
+            BanManager manager = mock(BanManager.class);
+            BanCinematic cinematic = new BanCinematic(plugin, manager);
+            Player player = mock(Player.class);
+            UUID uuid = UUID.randomUUID();
+            when(player.getUniqueId()).thenReturn(uuid);
+            when(player.getName()).thenReturn("Alvo");
+            when(player.getGameMode()).thenReturn(org.bukkit.GameMode.SURVIVAL);
+            when(player.getPersistentDataContainer()).thenReturn(mock(org.bukkit.persistence.PersistentDataContainer.class));
+            var online = new java.util.concurrent.atomic.AtomicBoolean(true);
+            when(player.isOnline()).thenAnswer(call -> online.get());
+            CinematicSession session = new CinematicSession(player, new Location(null, 0, 64, 0),
+                    mock(CommandSender.class), "CONSOLE", "regra", 60L, CinematicSettings.from(config));
+            var sessionsField = BanCinematic.class.getDeclaredField("sessions");
+            sessionsField.setAccessible(true);
+            ((java.util.Map<UUID, CinematicSession>) sessionsField.get(cinematic)).put(uuid, session);
+            doAnswer(call -> {
+                online.set(false);
+                cinematic.onQuit(new org.bukkit.event.player.PlayerQuitEvent(player,
+                        net.kyori.adventure.text.Component.text("quit")));
+                return null;
+            }).when(player).kick(any(net.kyori.adventure.text.Component.class));
+            BukkitScheduler scheduler = mock(BukkitScheduler.class);
+            bukkit.when(Bukkit::getScheduler).thenReturn(scheduler);
+            when(scheduler.runTaskLater(eq(plugin), any(Runnable.class), eq(1L))).thenAnswer(call -> {
+                call.<Runnable>getArgument(1).run();
+                return mock(BukkitTask.class);
+            });
+            var finish = BanCinematic.class.getDeclaredMethod("finishHit", CinematicSession.class, Player.class);
+            finish.setAccessible(true);
+            finish.invoke(cinematic, session, player);
+            verify(manager).announceBan("Alvo", "regra", "CONSOLE", 60L);
+            verify(manager).sendBanConfirmation(session.source(), "Alvo", "regra", 60L);
+            verify(player).kick(any(net.kyori.adventure.text.Component.class));
+            assertFalse(cinematic.isRunning(uuid));
+        }
     }
 
     @Test
@@ -346,7 +582,7 @@
     }
 
     @Test
-    void queuedIdentityWritesPreserveJoinTimeAndLatestCachedIdentity() throws Exception {
+    void queuedIdentityWritesPreserveJoinTimeAndAreVisibleToLaterQueuedQueries() throws Exception {
         var release = new java.util.concurrent.CountDownLatch(1);
         try (DatabaseExecutor executor = DatabaseExecutor.create()) {
             executor.execute(() -> {
@@ -355,24 +591,29 @@
             });
             java.util.concurrent.CompletableFuture<Boolean> first;
             java.util.concurrent.CompletableFuture<Boolean> second;
+            java.util.concurrent.CompletableFuture<IdentityStorage.Identity> query;
             UUID newest = UUID.randomUUID();
-            Instant latestJoin;
+            Instant beforeJoin = Instant.now();
+            Instant afterJoin;
             try {
                 first = identities.recordAsync(executor, UUID.randomUUID(), "Alvo");
                 second = identities.recordAsync(executor, newest, "Alvo");
-                latestJoin = identities.get("Alvo").lastSeen();
-                assertEquals(newest, identities.resolve("Alvo"));
+                afterJoin = Instant.now();
+                query = executor.submit(() -> identities.get("ALVO"));
                 assertFalse(first.isDone());
                 assertFalse(second.isDone());
+                assertFalse(query.isDone());
+                assertNull(identities.get("Alvo"), "Identidades ainda não gravadas não devem ser publicadas.");
             } finally {
                 release.countDown();
             }
             assertTrue(first.get(5, java.util.concurrent.TimeUnit.SECONDS));
             assertTrue(second.get(5, java.util.concurrent.TimeUnit.SECONDS));
+            var identity = query.get(5, java.util.concurrent.TimeUnit.SECONDS);
+            assertEquals(newest, identity.uuid());
+            assertTrue(identity.lastSeen().toEpochMilli() >= beforeJoin.toEpochMilli());
+            assertTrue(identity.lastSeen().toEpochMilli() <= afterJoin.toEpochMilli());
             assertEquals(newest, identities.resolve("Alvo"));
-            identities.invalidate();
-            assertEquals(newest, identities.resolve("Alvo"));
-            assertEquals(latestJoin.toEpochMilli(), identities.get("Alvo").lastSeen().toEpochMilli());
         }
     }
 
@@ -384,6 +625,7 @@
                 .doCallRealMethod().when(failingDatabase).connect();
         UUID uuid = UUID.randomUUID();
         assertFalse(storage.recordAsync(DatabaseExecutor.inline(), uuid, "Alvo").join());
+        assertNull(storage.get("Alvo"), "Uma gravação com falha não pode deixar identidade em memória.");
         assertTrue(storage.recordAsync(DatabaseExecutor.inline(), uuid, "Alvo").join());
         IdentityStorage reloaded = new IdentityStorage(plugin, database);
         assertEquals(uuid, reloaded.resolve("Alvo"));
@@ -423,11 +665,10 @@
         UUID uuid = UUID.randomUUID();
         assertTrue(identities.record(uuid, "Alvo"));
         var recorded = identities.get("alvo");
-        identities.invalidate();
         assertEquals(recorded.lastSeen().toEpochMilli(), identities.get("ALVO").lastSeen().toEpochMilli());
         PunishmentLogger history = new PunishmentLogger(plugin, database);
-        BanManager bans = new BanManager(plugin, new BanStorage(plugin, database), history, DatabaseExecutor.inline());
-        MuteManager mutes = new MuteManager(plugin, new MuteStorage(plugin, database), history, DatabaseExecutor.inline());
+        BanManager bans = new BanManager(plugin, new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN), history, DatabaseExecutor.inline());
+        MuteManager mutes = new MuteManager(plugin, new PunishmentStorage(plugin, database, PunishmentStorage.Kind.MUTE), history, DatabaseExecutor.inline());
         assertEquals(PunishmentResult.SUCCESS, bans.ban(uuid, "Alvo", "BanReason", "Admin").join());
         assertEquals(PunishmentResult.SUCCESS, mutes.tempMute(uuid, "Alvo", "MuteReason", "Staff", 3600).join());
         ConsoleCommandSender sender = mock(ConsoleCommandSender.class);
@@ -445,10 +686,10 @@
     void checkHandlesUnknownPlayersUsageAndExpiredPunishments() {
         UUID uuid = UUID.randomUUID();
         identities.record(uuid, "Alvo");
-        BanStorage banStorage = new BanStorage(plugin, database);
-        MuteStorage muteStorage = new MuteStorage(plugin, database);
-        assertTrue(banStorage.put(new BanData(uuid, "Alvo", "expirado", "Admin", Instant.now().minusSeconds(1))));
-        assertTrue(muteStorage.put(new br.com.bancinematic.punishment.MuteData(
+        PunishmentStorage banStorage = new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN);
+        PunishmentStorage muteStorage = new PunishmentStorage(plugin, database, PunishmentStorage.Kind.MUTE);
+        assertTrue(banStorage.put(new PunishmentData(uuid, "Alvo", "expirado", "Admin", Instant.now().minusSeconds(1))));
+        assertTrue(muteStorage.put(new br.com.bancinematic.punishment.PunishmentData(
                 uuid, "Alvo", "expirado", "Admin", Instant.now().minusSeconds(1))));
         PunishmentLogger history = new PunishmentLogger(plugin, database);
         var check = new br.com.bancinematic.command.CheckCommand(plugin,
@@ -467,7 +708,7 @@
     @Test
     void unmuteAcceptsBothUuidFormatsAndPreservesTheMutedNameDespiteNameReuse() {
         PunishmentLogger history = new PunishmentLogger(plugin, database);
-        MuteManager manager = new MuteManager(plugin, new MuteStorage(plugin, database), history, DatabaseExecutor.inline());
+        MuteManager manager = new MuteManager(plugin, new PunishmentStorage(plugin, database, PunishmentStorage.Kind.MUTE), history, DatabaseExecutor.inline());
         UUID other = UUID.randomUUID();
         identities.record(other, "NomeAntigo");
         assertEquals(PunishmentResult.SUCCESS, manager.mute(other, "OutraConta", "regra", "CONSOLE").join());
@@ -490,13 +731,13 @@
     @Test
     void unmutePrefixSearchReturnsActiveNamesWithoutOnlinePlayerQueries() {
         DatabaseManager tracked = org.mockito.Mockito.spy(database);
-        MuteStorage storage = new MuteStorage(plugin, tracked);
+        PunishmentStorage storage = new PunishmentStorage(plugin, tracked, PunishmentStorage.Kind.MUTE);
         PunishmentLogger history = new PunishmentLogger(plugin, tracked);
         UUID removed = UUID.randomUUID();
-        assertTrue(storage.put(new br.com.bancinematic.punishment.MuteData(UUID.randomUUID(), "Bruno", "regra", "CONSOLE", null)));
-        assertTrue(storage.put(new br.com.bancinematic.punishment.MuteData(UUID.randomUUID(), "Alice", "regra", "CONSOLE", Instant.now().plusSeconds(3600))));
-        assertTrue(storage.put(new br.com.bancinematic.punishment.MuteData(UUID.randomUUID(), "Antigo", "regra", "CONSOLE", Instant.now().minusSeconds(60))));
-        assertTrue(storage.put(new br.com.bancinematic.punishment.MuteData(removed, "Removido", "regra", "CONSOLE", null)));
+        assertTrue(storage.put(new br.com.bancinematic.punishment.PunishmentData(UUID.randomUUID(), "Bruno", "regra", "CONSOLE", null)));
+        assertTrue(storage.put(new br.com.bancinematic.punishment.PunishmentData(UUID.randomUUID(), "Alice", "regra", "CONSOLE", Instant.now().plusSeconds(3600))));
+        assertTrue(storage.put(new br.com.bancinematic.punishment.PunishmentData(UUID.randomUUID(), "Antigo", "regra", "CONSOLE", Instant.now().minusSeconds(60))));
+        assertTrue(storage.put(new br.com.bancinematic.punishment.PunishmentData(removed, "Removido", "regra", "CONSOLE", null)));
         assertEquals(PunishmentResult.SUCCESS, storage.removeAndLog(removed, "Removido", "Removido", "CONSOLE",
                 br.com.bancinematic.punishment.PunishmentType.UNMUTE, history));
         org.mockito.Mockito.clearInvocations(tracked);
@@ -515,9 +756,9 @@
 
     @Test
     void unmuteRejectsMalformedUnknownAndExpiredTargetsWithoutAddingHistory() {
-        MuteStorage storage = new MuteStorage(plugin, database);
+        PunishmentStorage storage = new PunishmentStorage(plugin, database, PunishmentStorage.Kind.MUTE);
         UUID expired = UUID.randomUUID();
-        assertTrue(storage.put(new br.com.bancinematic.punishment.MuteData(expired, "Expirado", "regra", "CONSOLE", Instant.now().minusSeconds(60))));
+        assertTrue(storage.put(new br.com.bancinematic.punishment.PunishmentData(expired, "Expirado", "regra", "CONSOLE", Instant.now().minusSeconds(60))));
         PunishmentLogger history = new PunishmentLogger(plugin, database);
         var command = new UnmuteCommand(plugin, new MuteManager(plugin, storage, history, DatabaseExecutor.inline()));
         for (String input : new String[]{"1-1-1-1-1", "Desconhecido", UUID.randomUUID().toString(), expired.toString()}) {
@@ -529,8 +770,28 @@
     }
 
     @Test
+    void unbanDistinguishesUnknownNamesFromKnownPlayersAndExplicitUuidsWithoutBans() {
+        config.set("messages.already-unbanned", "NOT_BANNED");
+        UUID known = UUID.randomUUID();
+        assertTrue(identities.record(known, "Conhecido"));
+        BanManager manager = new BanManager(plugin, new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN),
+                new PunishmentLogger(plugin, database), DatabaseExecutor.inline());
+        UnbanCommand command = new UnbanCommand(plugin, manager, mock(BanCinematic.class));
+        for (String input : new String[]{"Desconhecido", "Conhecido", UUID.randomUUID().toString()}) {
+            CommandSender sender = mock(CommandSender.class);
+            command.onCommand(sender, mock(Command.class), "unban", new String[]{input});
+            String expected = input.equals("Desconhecido") ? "NEVER_JOINED" : "NOT_BANNED";
+            String unexpected = input.equals("Desconhecido") ? "NOT_BANNED" : "NEVER_JOINED";
+            verify(sender).sendMessage(expected);
+            verify(sender, never()).sendMessage(unexpected);
+            verify(sender, never()).sendMessage("STORAGE_ERROR");
+        }
+        assertEquals(0, new PunishmentLogger(plugin, database).getHistoryPage(known, 0, 8).totalEntries());
+    }
+
+    @Test
     void unbanAcceptsBothUuidFormatsWithoutKnownNamesAndPreservesTheBannedName() {
-        BanManager manager = new BanManager(plugin, new BanStorage(plugin, database),
+        BanManager manager = new BanManager(plugin, new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN),
                 new PunishmentLogger(plugin, database), DatabaseExecutor.inline());
         UUID unrelated = UUID.randomUUID();
         identities.record(unrelated, "NomeAntigo");
@@ -556,7 +817,7 @@
     @Test
     void unbanUuidStillRespectsTheCinematicAndUnknownOrMalformedInputsDoNothing() {
         UUID uuid = UUID.randomUUID();
-        BanManager manager = new BanManager(plugin, new BanStorage(plugin, database),
+        BanManager manager = new BanManager(plugin, new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN),
                 new PunishmentLogger(plugin, database), DatabaseExecutor.inline());
         assertEquals(PunishmentResult.SUCCESS, manager.ban(uuid, "Alvo", "regra", "CONSOLE").join());
         BanCinematic cinematic = mock(BanCinematic.class);
@@ -573,14 +834,14 @@
     @Test
     void unbanPrefixSearchReturnsActiveNamesWithoutOnlinePlayerQueries() {
         DatabaseManager trackedDatabase = org.mockito.Mockito.spy(database);
-        BanStorage storage = new BanStorage(plugin, trackedDatabase);
+        PunishmentStorage storage = new PunishmentStorage(plugin, trackedDatabase, PunishmentStorage.Kind.BAN);
         UUID removed = UUID.randomUUID();
-        assertTrue(storage.put(new BanData(UUID.randomUUID(), "Bruno", "regra", "CONSOLE", null)));
-        assertTrue(storage.put(new BanData(UUID.randomUUID(), "Alice", "regra", "CONSOLE",
+        assertTrue(storage.put(new PunishmentData(UUID.randomUUID(), "Bruno", "regra", "CONSOLE", null)));
+        assertTrue(storage.put(new PunishmentData(UUID.randomUUID(), "Alice", "regra", "CONSOLE",
                 Instant.now().plusSeconds(3600))));
-        assertTrue(storage.put(new BanData(UUID.randomUUID(), "Antigo", "regra", "CONSOLE",
+        assertTrue(storage.put(new PunishmentData(UUID.randomUUID(), "Antigo", "regra", "CONSOLE",
                 Instant.now().minusSeconds(60))));
-        assertTrue(storage.put(new BanData(removed, "Removido", "regra", "CONSOLE", null)));
+        assertTrue(storage.put(new PunishmentData(removed, "Removido", "regra", "CONSOLE", null)));
         assertEquals(PunishmentResult.SUCCESS, storage.removeAndLog(removed, "Removido", "Removido", "CONSOLE",
                 br.com.bancinematic.punishment.PunishmentType.UNBAN, new PunishmentLogger(plugin, database)));
         org.mockito.Mockito.clearInvocations(trackedDatabase);
@@ -683,7 +944,9 @@
                 }
                 verify(target).kick(any(net.kyori.adventure.text.Component.class));
                 verify(sender).sendMessage(any(net.kyori.adventure.text.Component.class));
-                org.mockito.Mockito.verifyNoInteractions(history);
+                verify(history).logConsole(br.com.bancinematic.punishment.PunishmentType.KICK,
+                        uuid, "Alvo", "regra", "CONSOLE", null);
+                verify(history, never()).log(any(), any(), anyString(), anyString(), anyString(), any());
             } finally {
                 release.countDown();
             }
@@ -716,6 +979,8 @@
             verify(target).kick(any(net.kyori.adventure.text.Component.class));
             verify(sender).sendMessage(any(net.kyori.adventure.text.Component.class));
             verify(sender, never()).sendMessage("STORAGE_ERROR");
+            verify(history).logConsole(br.com.bancinematic.punishment.PunishmentType.KICK,
+                    uuid, "Alvo", "regra", "CONSOLE", null);
         }
     }
     @Test
@@ -723,7 +988,7 @@
         UUID targetId = UUID.randomUUID();
         UUID adminId = UUID.randomUUID();
         identities.record(targetId, "Alvo");
-        BanManager manager = new BanManager(plugin, new BanStorage(plugin, database),
+        BanManager manager = new BanManager(plugin, new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN),
                 new PunishmentLogger(plugin, database), DatabaseExecutor.inline());
         Player admin = mock(Player.class);
         when(admin.getUniqueId()).thenReturn(adminId);
@@ -751,9 +1016,9 @@
         UUID uuid = UUID.randomUUID();
         identities.record(uuid, "Alvo");
         PunishmentLogger history = new PunishmentLogger(plugin, database);
-        BanManager bans = new BanManager(plugin, new BanStorage(plugin, database), history,
+        BanManager bans = new BanManager(plugin, new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN), history,
                 DatabaseExecutor.inline());
-        MuteManager mutes = new MuteManager(plugin, new MuteStorage(plugin, database), history,
+        MuteManager mutes = new MuteManager(plugin, new PunishmentStorage(plugin, database, PunishmentStorage.Kind.MUTE), history,
                 DatabaseExecutor.inline());
         assertEquals(PunishmentResult.SUCCESS, bans.tempBan(uuid, "Alvo", "regra", "CONSOLE", 172800).join());
         assertEquals(PunishmentResult.SUCCESS, mutes.tempMute(uuid, "Alvo", "regra", "CONSOLE", 3600).join());
@@ -832,9 +1097,9 @@
         UUID uuid = UUID.randomUUID();
         identities.record(uuid, "Alvo");
         PunishmentLogger history = new PunishmentLogger(plugin, database);
-        BanManager bans = new BanManager(plugin, new BanStorage(plugin, database), history,
+        BanManager bans = new BanManager(plugin, new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN), history,
                 DatabaseExecutor.inline());
-        MuteManager mutes = new MuteManager(plugin, new MuteStorage(plugin, database), history,
+        MuteManager mutes = new MuteManager(plugin, new PunishmentStorage(plugin, database, PunishmentStorage.Kind.MUTE), history,
                 DatabaseExecutor.inline());
         ConsoleCommandSender console = mock(ConsoleCommandSender.class);
         when(console.getName()).thenReturn("CONSOLE");
@@ -876,7 +1141,7 @@
         UUID uuid = UUID.randomUUID();
         BanManager manager = new BanManager(
                 plugin,
-                new BanStorage(plugin, database),
+                new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN),
                 new PunishmentLogger(plugin, database),
                 DatabaseExecutor.inline()
         );
@@ -901,7 +1166,7 @@
     void tempbanStoresDurationAndKeepsItOutOfTheReason() {
         UUID uuid = UUID.randomUUID();
         identities.record(uuid, "BanTemporario");
-        BanStorage storage = new BanStorage(plugin, database);
+        PunishmentStorage storage = new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN);
         PunishmentLogger history = new PunishmentLogger(plugin, database);
         BanManager manager = new BanManager(plugin, storage, history, DatabaseExecutor.inline());
         CommandSender sender = mock(CommandSender.class);
@@ -915,12 +1180,12 @@
                     new String[]{"BanTemporario", "spam", "no chat", "15m"});
         }
 
-        BanData stored = manager.get(uuid);
+        PunishmentData stored = manager.get(uuid);
         assertNotNull(stored);
         assertEquals("spam no chat", stored.reason());
         assertNotNull(stored.expires(), "Tempban deve salvar a expiração.");
         assertTrue(stored.expires().isAfter(Instant.now()));
-        assertNotNull(new BanStorage(plugin, database).get(uuid).expires(),
+        assertNotNull(new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN).get(uuid).expires(),
                 "A expiração do tempban deve sobreviver ao reload do armazenamento.");
     }
 
@@ -928,7 +1193,7 @@
     void tempmuteAcceptsDurationAfterReason() {
         UUID uuid = UUID.randomUUID();
         identities.record(uuid, "MuteTemporario");
-        MuteStorage storage = new MuteStorage(plugin, database);
+        PunishmentStorage storage = new PunishmentStorage(plugin, database, PunishmentStorage.Kind.MUTE);
         MuteManager manager = new MuteManager(plugin, storage, new PunishmentLogger(plugin, database), DatabaseExecutor.inline());
         CommandSender sender = mock(CommandSender.class);
         when(sender.getName()).thenReturn("staff");
@@ -953,10 +1218,10 @@
         CommandSender sender = mock(CommandSender.class);
         Command command = mock(Command.class);
         BanManager bans = new BanManager(
-                plugin, new BanStorage(plugin, database), new PunishmentLogger(plugin, database),
+                plugin, new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN), new PunishmentLogger(plugin, database),
                 DatabaseExecutor.inline());
         MuteManager mutes = new MuteManager(
-                plugin, new MuteStorage(plugin, database), new PunishmentLogger(plugin, database),
+                plugin, new PunishmentStorage(plugin, database, PunishmentStorage.Kind.MUTE), new PunishmentLogger(plugin, database),
                 DatabaseExecutor.inline());
 
         new BanCommand(plugin, bans, mock(BanCinematic.class)).onCommand(

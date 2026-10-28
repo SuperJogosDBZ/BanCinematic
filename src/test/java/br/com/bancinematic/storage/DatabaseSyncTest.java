@@ -2,7 +2,7 @@ package br.com.bancinematic.storage;
 
 import br.com.bancinematic.BanCinematicPlugin;
 import br.com.bancinematic.cinematic.BanCinematic;
-import br.com.bancinematic.punishment.BanData;
+import br.com.bancinematic.punishment.PunishmentData;
 import br.com.bancinematic.util.MessageUtil;
 import org.bukkit.Bukkit;
 import org.bukkit.Server;
@@ -21,9 +21,8 @@ import static org.mockito.Mockito.*;
 
 class DatabaseSyncTest {
     private BanCinematicPlugin plugin;
-    private BanStorage bans;
-    private MuteStorage mutes;
-    private IdentityStorage identities;
+    private PunishmentStorage bans;
+    private PunishmentStorage mutes;
     private BanCinematic cinematic;
     private br.com.bancinematic.punishment.MuteManager muteManager;
     private DatabaseSync sync;
@@ -32,9 +31,8 @@ class DatabaseSyncTest {
     @BeforeEach
     void setUp() {
         plugin = mock(BanCinematicPlugin.class);
-        bans = mock(BanStorage.class);
-        mutes = mock(MuteStorage.class);
-        identities = mock(IdentityStorage.class);
+        bans = mock(PunishmentStorage.class);
+        mutes = mock(PunishmentStorage.class);
         cinematic = mock(BanCinematic.class);
         muteManager = mock(br.com.bancinematic.punishment.MuteManager.class);
         config = new YamlConfiguration();
@@ -46,7 +44,7 @@ class DatabaseSyncTest {
         when(plugin.databaseExecutor()).thenReturn(DatabaseExecutor.inline());
         doAnswer(invocation -> { invocation.<Runnable>getArgument(0).run(); return null; })
                 .when(plugin).runSync(any(Runnable.class));
-        sync = new DatabaseSync(plugin, bans, mutes, identities, muteManager, cinematic);
+        sync = new DatabaseSync(plugin, bans, mutes, muteManager, cinematic);
     }
 
     @Test
@@ -78,8 +76,8 @@ class DatabaseSyncTest {
         when(remote.isOnline()).thenReturn(true);
         when(local.isOnline()).thenReturn(true);
         when(clean.isOnline()).thenReturn(true);
-        when(bans.find(any())).thenReturn(java.util.Map.of(remoteId, new BanData(remoteId, "Remoto", "regra", "OutroServidor", null),
-                localId, new BanData(localId, "Local", "regra", "CONSOLE", null)));
+        when(bans.find(any())).thenReturn(java.util.Map.of(remoteId, new PunishmentData(remoteId, "Remoto", "regra", "OutroServidor", null),
+                localId, new PunishmentData(localId, "Local", "regra", "CONSOLE", null)));
 
         when(cinematic.isRunning(localId)).thenReturn(true);
         try (var bukkit = mockStatic(Bukkit.class)) {
@@ -91,7 +89,6 @@ class DatabaseSyncTest {
         verify(clean, never()).kick(any(net.kyori.adventure.text.Component.class));
         verify(plugin, never()).broadcastPunishment(anyString(), anyString(), anyString(), anyString(), anyString());
         verify(mutes).find(any());
-        verify(identities).invalidate();
     }
 
     @Test
@@ -103,7 +100,6 @@ class DatabaseSyncTest {
         }
         verify(mutes).revision();
         verify(mutes, never()).find(any());
-        verifyNoInteractions(identities);
         verify(plugin, never()).runSync(any());
     }
 
@@ -113,7 +109,7 @@ class DatabaseSyncTest {
         UUID id = UUID.randomUUID();
         when(player.getUniqueId()).thenReturn(id);
         when(player.isOnline()).thenReturn(true);
-        when(bans.find(any())).thenReturn(java.util.Map.of(id, new BanData(id, "Alvo", "old", "A", null)));
+        when(bans.find(any())).thenReturn(java.util.Map.of(id, new PunishmentData(id, "Alvo", "old", "A", null)));
         var callback = new java.util.concurrent.atomic.AtomicReference<Runnable>();
         doAnswer(call -> { callback.set(call.getArgument(0)); return null; }).when(plugin).runSync(any());
         try (var bukkit = mockStatic(Bukkit.class)) {
@@ -140,14 +136,13 @@ class DatabaseSyncTest {
                     sync.run();
                     sync.run();
                 }
-                verifyNoInteractions(bans, mutes, identities);
+                verifyNoInteractions(bans, mutes);
             } finally {
                 release.countDown();
             }
             executor.execute(() -> {}).get(5, TimeUnit.SECONDS);
             verify(bans).find(any());
             verify(mutes).find(any());
-            verify(identities).invalidate();
         }
     }
 }

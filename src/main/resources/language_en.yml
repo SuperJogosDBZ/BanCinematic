@@ -11,7 +11,7 @@ messages:
     mute: "&7Mute: &cActive &7| Remaining: &f%time% &7| Staff: &f%source% &7| Reason: &f%reason%"
   cinematic-command-blocked: "&cYou cannot use commands during a punishment."
   player-not-found: "&cPlayer not found."
-  player-never-joined: "&cPlayer does not exist."
+  player-never-joined: "&cThat player has never joined the server."
   storage-error: "&cCould not save the change. No change was confirmed; check the console."
   usage-ban: "&cUsage: /ban <player> <reason>"
   permanent-ban-time-hint: "&eYou entered a duration. Use /tempban <player> <duration> <reason> for a temporary ban."

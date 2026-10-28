@@ -11,7 +11,6 @@ import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Player;
 
-
 public final class MuteCommand implements CommandExecutor {
     private final BanCinematicPlugin plugin;
     private final MuteManager manager;

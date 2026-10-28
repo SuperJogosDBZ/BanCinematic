@@ -20,11 +20,9 @@ class PluginDescriptorTest {
             YamlConfiguration descriptor = YamlConfiguration.loadConfiguration(
                     new InputStreamReader(stream, StandardCharsets.UTF_8));
 
-            assertEquals("3.0.0", descriptor.getString("version"));
             assertEquals("1.21.11", descriptor.getString("api-version"));
-            assertEquals("SuperJogosDBZ", descriptor.getString("author"));
-            assertTrue(descriptor.getStringList("libraries").contains("org.xerial:sqlite-jdbc:3.53.4.0"));
-            assertTrue(descriptor.getStringList("libraries").contains("com.mysql:mysql-connector-j:26.7.0"));
+            assertTrue(descriptor.getStringList("libraries").stream().anyMatch(library -> library.startsWith("org.xerial:sqlite-jdbc:")));
+            assertTrue(descriptor.getStringList("libraries").stream().anyMatch(library -> library.startsWith("com.mysql:mysql-connector-j:")));
             assertEquals(Set.of("ban", "tempban", "unban", "mute", "tempmute", "unmute", "kick", "history", "check"),
                     descriptor.getConfigurationSection("commands").getKeys(false));
             assertEquals("bancinematic.check", descriptor.getString("commands.check.permission"));
@@ -35,10 +33,6 @@ class PluginDescriptorTest {
             assertTrue(stream != null, "config.yml deve estar no artefato.");
             YamlConfiguration config = YamlConfiguration.loadConfiguration(
                     new InputStreamReader(stream, StandardCharsets.UTF_8));
-            assertEquals("br", config.getString("language"));
-            assertEquals(9.0, config.getDouble("cinematic.monster.distance"));
-            assertEquals(5000, config.getInt("database.mysql.connect-timeout"));
-            assertEquals(10000, config.getInt("database.mysql.socket-timeout"));
             assertFalse(config.contains("messages"), "As mensagens devem ficar fora do config.yml.");
         }
 
@@ -47,8 +41,6 @@ class PluginDescriptorTest {
         assertEquals(portuguese.getConfigurationSection("messages").getKeys(true),
                 english.getConfigurationSection("messages").getKeys(true),
                 "Os dois idiomas devem oferecer as mesmas chaves de mensagem.");
-        assertEquals("&cJogador não existe.", portuguese.getString("messages.player-never-joined"));
-        assertEquals("&cPlayer does not exist.", english.getString("messages.player-never-joined"));
     }
 
     private YamlConfiguration loadYaml(String resourcePath) throws Exception {

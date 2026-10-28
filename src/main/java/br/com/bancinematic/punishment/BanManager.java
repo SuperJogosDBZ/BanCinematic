@@ -1,7 +1,7 @@
 package br.com.bancinematic.punishment;
 
 import br.com.bancinematic.BanCinematicPlugin;
-import br.com.bancinematic.storage.BanStorage;
+import br.com.bancinematic.storage.PunishmentStorage;
 import br.com.bancinematic.storage.DatabaseExecutor;
 import br.com.bancinematic.storage.PunishmentLogger;
 import br.com.bancinematic.util.TimeUtil;
@@ -12,11 +12,11 @@ import org.bukkit.command.CommandSender;
 
 public final class BanManager {
     private final BanCinematicPlugin plugin;
-    private final BanStorage storage;
+    private final PunishmentStorage storage;
     private final PunishmentLogger logger;
     private final DatabaseExecutor executor;
 
-    public BanManager(BanCinematicPlugin plugin, BanStorage storage, PunishmentLogger logger,
+    public BanManager(BanCinematicPlugin plugin, PunishmentStorage storage, PunishmentLogger logger,
                       DatabaseExecutor executor) {
         this.plugin = plugin;
         this.storage = storage;
@@ -24,17 +24,17 @@ public final class BanManager {
         this.executor = executor;
     }
 
-    public BanData get(UUID uuid) { return storage.get(uuid); }
+    public PunishmentData get(UUID uuid) { return storage.get(uuid); }
     public java.util.List<String> suggestNames(String prefix) { return storage.suggestNames(prefix); }
 
     public CompletableFuture<PunishmentResult> ban(UUID uuid, String name, String reason, String source) {
-        return run(() -> storage.putAndLog(new BanData(uuid, name, reason, source, null),
+        return run(() -> storage.putAndLog(new PunishmentData(uuid, name, reason, source, null),
                 PunishmentType.BAN, null, logger));
     }
 
     public CompletableFuture<PunishmentResult> tempBan(UUID uuid, String name, String reason,
                                                        String source, long seconds) {
-        return run(() -> storage.putAndLog(new BanData(uuid, name, reason, source, Instant.now().plusSeconds(seconds)),
+        return run(() -> storage.putAndLog(new PunishmentData(uuid, name, reason, source, Instant.now().plusSeconds(seconds)),
                 PunishmentType.TEMPBAN, seconds, logger));
     }
 

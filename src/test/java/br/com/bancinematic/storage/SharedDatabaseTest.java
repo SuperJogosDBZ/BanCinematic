@@ -7,7 +7,6 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Path;
-import java.sql.SQLException;
 import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.*;
@@ -63,8 +62,8 @@ class SharedDatabaseTest {
     private void exerciseTwoInstances(BanCinematicPlugin plugin) throws Exception {
         try (DatabaseManager first = new DatabaseManager(plugin); DatabaseManager second = new DatabaseManager(plugin)) {
             first.initialize();
-            BanStorage aBans = new BanStorage(plugin, first), bBans = new BanStorage(plugin, second);
-            MuteStorage aMutes = new MuteStorage(plugin, first), bMutes = new MuteStorage(plugin, second);
+            PunishmentStorage aBans = new PunishmentStorage(plugin, first, PunishmentStorage.Kind.BAN), bBans = new PunishmentStorage(plugin, second, PunishmentStorage.Kind.BAN);
+            PunishmentStorage aMutes = new PunishmentStorage(plugin, first, PunishmentStorage.Kind.MUTE), bMutes = new PunishmentStorage(plugin, second, PunishmentStorage.Kind.MUTE);
             IdentityStorage aNames = new IdentityStorage(plugin, first), bNames = new IdentityStorage(plugin, second);
             PunishmentLogger history = new PunishmentLogger(plugin, first);
             BanManager a = new BanManager(plugin, aBans, history, DatabaseExecutor.inline());
@@ -97,16 +96,14 @@ class SharedDatabaseTest {
 
             assertTrue(aNames.record(uuid, "Alvo"));
             assertEquals(uuid, bNames.resolve("Alvo"));
-            bNames.invalidate();
             assertEquals(uuid, bNames.resolve("ALVO"));
             UUID reused = UUID.randomUUID();
             assertTrue(aNames.record(reused, "Alvo"));
-            bNames.invalidate();
             assertEquals(reused, bNames.resolve("alvo"));
             assertNotNull(bNames.get("Alvo").lastSeen());
 
             UUID expired = UUID.randomUUID();
-            assertTrue(aBans.put(new BanData(expired, "Expirado", "old", "A", Instant.now().minusSeconds(60))));
+            assertTrue(aBans.put(new PunishmentData(expired, "Expirado", "old", "A", Instant.now().minusSeconds(60))));
             assertEquals(PunishmentResult.SUCCESS, b.ban(expired, "Expirado", "new", "B").join());
 
             assertEquals("new", a.get(expired).reason());
@@ -114,7 +111,7 @@ class SharedDatabaseTest {
             try (ExecutorService threads = Executors.newFixedThreadPool(2)) {
                 for (int i = 0; i < 4; i++) {
                     UUID race = UUID.randomUUID();
-                    if (i % 2 == 0) assertTrue(aBans.put(new BanData(race, "Race", "expired", "A", Instant.now().minusSeconds(60))));
+                    if (i % 2 == 0) assertTrue(aBans.put(new PunishmentData(race, "Race", "expired", "A", Instant.now().minusSeconds(60))));
                     CyclicBarrier barrier = new CyclicBarrier(2);
                     Future<PunishmentResult> left = threads.submit(() -> { barrier.await(); return a.ban(race, "Race", "left", "A").join(); });
                     Future<PunishmentResult> right = threads.submit(() -> { barrier.await(); return b.ban(race, "Race", "right", "B").join(); });
@@ -125,7 +122,7 @@ class SharedDatabaseTest {
                 }
                 for (int i = 0; i < 4; i++) {
                     UUID race = UUID.randomUUID();
-                    if (i % 2 == 0) assertTrue(aMutes.put(new MuteData(race, "Race", "expired", "A", Instant.now().minusSeconds(60))));
+                    if (i % 2 == 0) assertTrue(aMutes.put(new PunishmentData(race, "Race", "expired", "A", Instant.now().minusSeconds(60))));
                     CyclicBarrier barrier = new CyclicBarrier(2);
                     Future<PunishmentResult> left = threads.submit(() -> { barrier.await(); return am.mute(race, "Race", "left", "A").join(); });
                     Future<PunishmentResult> right = threads.submit(() -> { barrier.await(); return bm.mute(race, "Race", "right", "B").join(); });
@@ -138,29 +135,4 @@ class SharedDatabaseTest {
         }
     }
 
-    @Test
-    void identityRefreshPreservesQueuedLocalJoins() throws Exception {
-        YamlConfiguration config = new YamlConfiguration();
-        config.set("database.type", "SQLITE");
-        BanCinematicPlugin plugin = plugin(config);
-        try (DatabaseManager database = new DatabaseManager(plugin); DatabaseExecutor executor = DatabaseExecutor.create()) {
-            database.initialize();
-            IdentityStorage identities = new IdentityStorage(plugin, database);
-            assertTrue(identities.record(UUID.randomUUID(), "Alvo"));
-            CountDownLatch release = new CountDownLatch(1);
-            executor.execute(() -> { try { release.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); } });
-            UUID joined = UUID.randomUUID();
-            CompletableFuture<Boolean> saved;
-            try {
-                saved = identities.recordAsync(executor, joined, "Alvo");
-                identities.invalidate();
-                assertEquals(joined, identities.resolve("Alvo"));
-            } finally {
-                release.countDown();
-            }
-            assertTrue(saved.get(5, TimeUnit.SECONDS));
-            identities.invalidate();
-            assertEquals(joined, identities.resolve("Alvo"));
-        }
-    }
 }

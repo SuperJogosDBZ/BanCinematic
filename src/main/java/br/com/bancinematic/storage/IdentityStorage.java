@@ -5,37 +5,17 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.Instant;
-import java.util.HashMap;
 import java.util.Locale;
-import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 public final class IdentityStorage {
     private final BanCinematicPlugin plugin;
     private final DatabaseManager database;
-    private final Object cacheLock = new Object();
-    private final Map<String, Identity> pending = new HashMap<>();
-    private static final int CACHE_LIMIT = 1024;
-    private static final long CACHE_TTL_NANOS = java.util.concurrent.TimeUnit.SECONDS.toNanos(30);
-    private final java.util.LinkedHashMap<String, Cached> names = new java.util.LinkedHashMap<>(16, 0.75f, true);
 
     public IdentityStorage(BanCinematicPlugin plugin, DatabaseManager database) {
         this.plugin = plugin;
         this.database = database;
-    }
-
-    public void invalidate() {
-        synchronized (cacheLock) { names.clear(); }
-    }
-
-    public int cachedCount() {
-        synchronized (cacheLock) { return names.size(); }
-    }
-
-    private void cache(String key, Identity identity) {
-        names.put(key, new Cached(identity, System.nanoTime()));
-        while (names.size() > CACHE_LIMIT) names.remove(names.keySet().iterator().next());
     }
 
     public UUID resolve(String name) {
@@ -45,12 +25,7 @@ public final class IdentityStorage {
 
     public CompletableFuture<Boolean> recordAsync(DatabaseExecutor executor, UUID uuid, String name) {
         Identity identity = new Identity(uuid, name, Instant.now());
-        synchronized (cacheLock) {
-            pending.put(normalize(name), identity);
-            cache(normalize(name), identity);
-        }
         return executor.submit(() -> recordAt(identity)).exceptionally(error -> {
-            finish(identity, false);
             plugin.getLogger().severe("Falha inesperada ao salvar a identidade de " + name + ": " + error);
             return false;
         });
@@ -60,8 +35,7 @@ public final class IdentityStorage {
         return recordAt(new Identity(uuid, name, Instant.now()));
     }
 
-    private synchronized boolean recordAt(Identity identity) {
-        boolean saved = false;
+    private boolean recordAt(Identity identity) {
         try {
             database.execute(connection -> {
                 String sql = "INSERT INTO player_names (normalized_name, player_uuid, name, last_seen) VALUES (?, ?, ?, ?) "
@@ -82,37 +56,18 @@ public final class IdentityStorage {
                 }
                 return null;
             });
-            saved = true;
             return true;
         } catch (SQLException error) {
             plugin.getLogger().severe("Não foi possível salvar a identidade de " + identity.name() + ": " + error.getMessage());
             return false;
-        } finally {
-            finish(identity, saved);
         }
     }
 
-    private void finish(Identity identity, boolean saved) {
-        synchronized (cacheLock) {
-            String key = normalize(identity.name());
-            pending.remove(key, identity);
-            if (saved && !pending.containsKey(key)) cache(key, identity);
-        }
-    }
-
-    /** Consulta o cache limitado e, em caso de falta, o SQL. Chamar fora da thread principal. */
-    public synchronized Identity get(String name) {
+    public Identity get(String name) {
         if (name == null || name.isBlank() || name.length() > 64) return null;
         String key = normalize(name);
-        synchronized (cacheLock) {
-            Identity queued = pending.get(key);
-            if (queued != null) return queued;
-            Cached cached = names.get(key);
-            if (cached != null && System.nanoTime() - cached.at() < CACHE_TTL_NANOS) return cached.identity();
-            names.remove(key);
-        }
         try {
-            Identity found = database.execute(connection -> {
+            return database.execute(connection -> {
                 try (PreparedStatement statement = connection.prepareStatement(database.sql(
                         "SELECT player_uuid, name, last_seen FROM player_names WHERE normalized_name = ?"))) {
                     statement.setString(1, key);
@@ -123,18 +78,11 @@ public final class IdentityStorage {
                     }
                 }
             });
-            synchronized (cacheLock) {
-                Identity queued = pending.get(key);
-                if (queued != null) return queued;
-                if (found != null) cache(key, found);
-                return found;
-            }
         } catch (SQLException error) {
             throw new IllegalStateException("Não foi possível consultar a identidade do jogador.", error);
         }
     }
 
-    private record Cached(Identity identity, long at) {}
     public record Identity(UUID uuid, String name, Instant lastSeen) {}
     private static String normalize(String name) { return name.toLowerCase(Locale.ROOT); }
 }

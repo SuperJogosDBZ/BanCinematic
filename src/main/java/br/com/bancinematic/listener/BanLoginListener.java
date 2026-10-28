@@ -1,7 +1,7 @@
 package br.com.bancinematic.listener;
 
 import br.com.bancinematic.BanCinematicPlugin;
-import br.com.bancinematic.punishment.BanData;
+import br.com.bancinematic.punishment.PunishmentData;
 import br.com.bancinematic.punishment.BanManager;
 import br.com.bancinematic.util.TimeUtil;
 import org.bukkit.event.EventHandler;
@@ -14,10 +14,6 @@ public final class BanLoginListener implements Listener {
     private final java.util.function.Supplier<BanManager> manager;
     private final BanCinematicPlugin plugin;
     private final int timeout;
-
-    public BanLoginListener(BanCinematicPlugin plugin, BanManager banManager) {
-        this(plugin, () -> banManager);
-    }
 
     public BanLoginListener(BanCinematicPlugin plugin, java.util.function.Supplier<BanManager> manager) {
         this.plugin = plugin;
@@ -36,7 +32,7 @@ public final class BanLoginListener implements Listener {
         }
         var lookup = plugin.databaseExecutor().submit(() -> banManager.get(event.getUniqueId()));
         try {
-            BanData ban = lookup.get(timeout, TimeUnit.SECONDS);
+            PunishmentData ban = lookup.get(timeout, TimeUnit.SECONDS);
             if (ban == null) return;
             event.disallow(AsyncPlayerPreLoginEvent.Result.KICK_BANNED, screen(plugin, ban, event.getName()));
         } catch (Exception error) {
@@ -48,7 +44,7 @@ public final class BanLoginListener implements Listener {
         }
     }
 
-    static net.kyori.adventure.text.Component screen(BanCinematicPlugin plugin, BanData ban, String name) {
+    static net.kyori.adventure.text.Component screen(BanCinematicPlugin plugin, PunishmentData ban, String name) {
         String remaining = ban.permanent() ? "" : TimeUtil.formatRemaining(ban.expires(), plugin.messages()::get);
         return plugin.messages().component(plugin.messages().screen(
                 ban.permanent() ? "messages.ban-screen" : "messages.tempban-screen",

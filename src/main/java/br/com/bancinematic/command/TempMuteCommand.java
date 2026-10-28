@@ -9,7 +9,6 @@ import org.bukkit.Bukkit;
 import org.bukkit.command.*;
 import org.bukkit.entity.Player;
 
-
 public final class TempMuteCommand implements CommandExecutor {
     private final BanCinematicPlugin plugin;
     private final MuteManager manager;

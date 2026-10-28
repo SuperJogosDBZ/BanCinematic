@@ -132,7 +132,6 @@ public final class BanCinematic implements Listener {
                 .replace("%player%", cinematicTarget.getName()));
 
         CinematicSettings settings = CinematicSettings.from(plugin.getConfig());
-        // A proteção temporária do login não pode ser salva como invulnerabilidade permanente.
         if (!settings.enabled() || !loadedClients.contains(cinematicTarget)) {
             punishAndKick(source, sourceName, cinematicTarget, reason, duration);
             return;
@@ -731,7 +730,6 @@ public final class BanCinematic implements Listener {
         player.removePotionEffect(PotionEffectType.DARKNESS);
     }
 
-
     private boolean beginFinish(CinematicSession session) {
         return sessions.remove(session.playerId(), session);
     }
@@ -866,6 +864,8 @@ public final class BanCinematic implements Listener {
 
         if (beginFinish(session)) {
             cleanup(session);
+            banManager.announceBan(session.player().getName(), session.reason(), session.sourceName(), session.duration());
+            banManager.sendBanConfirmation(session.source(), session.player().getName(), session.reason(), session.duration());
         }
     }
 

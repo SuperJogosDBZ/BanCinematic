@@ -45,15 +45,15 @@ public final class BanCinematicPlugin extends JavaPlugin {
 
         getServer().getPluginManager().registerEvents(new BanLoginListener(this, () -> banManager), this);
 
-        BanStorage banStorage;
-        MuteStorage muteStorage;
+        PunishmentStorage banStorage;
+        PunishmentStorage muteStorage;
         PunishmentLogger punishmentLogger;
         databaseExecutor = DatabaseExecutor.create();
         try {
             database = new DatabaseManager(this);
             database.initialize();
-            banStorage = new BanStorage(this, database);
-            muteStorage = new MuteStorage(this, database);
+            banStorage = new PunishmentStorage(this, database, PunishmentStorage.Kind.BAN);
+            muteStorage = new PunishmentStorage(this, database, PunishmentStorage.Kind.MUTE);
             punishmentLogger = new PunishmentLogger(this, database);
             identityStorage = new IdentityStorage(this, database);
         } catch (Exception exception) {
@@ -76,7 +76,7 @@ public final class BanCinematicPlugin extends JavaPlugin {
 
         cinematic = new BanCinematic(this, banManager);
         getServer().getPluginManager().registerEvents(new ChatListener(muteManager), this);
-        getServer().getPluginManager().registerEvents(new MuteJoinListener(this, banManager, muteManager), this);
+        getServer().getPluginManager().registerEvents(new MuteJoinListener(this, muteManager), this);
         getServer().getPluginManager().registerEvents(new PlayerIdentityListener(this), this);
 
         register("ban", new BanCommand(this, banManager, cinematic));
@@ -95,7 +95,7 @@ public final class BanCinematicPlugin extends JavaPlugin {
             databaseExecutor.execute(banStorage::cleanupExpired);
         }, 20L * 60L, 20L * 60L);
 
-        new DatabaseSync(this, banStorage, muteStorage, identityStorage, muteManager, cinematic).start();
+        new DatabaseSync(this, banStorage, muteStorage, muteManager, cinematic).start();
 
         getLogger().info("BanCinematic " + getDescription().getVersion() + " habilitado.");
     }

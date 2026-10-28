@@ -1,6 +1,6 @@
 package br.com.bancinematic.listener;
 
-import br.com.bancinematic.punishment.MuteData;
+import br.com.bancinematic.punishment.PunishmentData;
 import br.com.bancinematic.punishment.MuteManager;
 import org.bukkit.Bukkit;
 import org.bukkit.event.EventHandler;
@@ -21,7 +21,7 @@ public final class ChatListener implements Listener {
             event.setCancelled(true);
             return;
         }
-        MuteData data = muteManager.getOnline(
+        PunishmentData data = muteManager.getOnline(
                 event.getPlayer().getUniqueId()
         );
 

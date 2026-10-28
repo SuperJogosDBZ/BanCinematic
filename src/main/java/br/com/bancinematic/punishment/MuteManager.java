@@ -2,7 +2,7 @@ package br.com.bancinematic.punishment;
 
 import br.com.bancinematic.BanCinematicPlugin;
 import br.com.bancinematic.storage.DatabaseExecutor;
-import br.com.bancinematic.storage.MuteStorage;
+import br.com.bancinematic.storage.PunishmentStorage;
 import br.com.bancinematic.storage.PunishmentLogger;
 import br.com.bancinematic.util.TimeUtil;
 import java.time.Instant;
@@ -12,12 +12,12 @@ import java.util.function.Supplier;
 
 public final class MuteManager {
     private final BanCinematicPlugin plugin;
-    private final MuteStorage storage;
+    private final PunishmentStorage storage;
     private final PunishmentLogger logger;
     private final DatabaseExecutor executor;
     private final java.util.concurrent.ConcurrentMap<UUID, OnlineMute> online = new java.util.concurrent.ConcurrentHashMap<>();
 
-    public MuteManager(BanCinematicPlugin plugin, MuteStorage storage, PunishmentLogger logger,
+    public MuteManager(BanCinematicPlugin plugin, PunishmentStorage storage, PunishmentLogger logger,
                        DatabaseExecutor executor) {
         this.plugin = plugin;
         this.storage = storage;
@@ -27,7 +27,7 @@ public final class MuteManager {
 
     public BanCinematicPlugin plugin() { return plugin; }
 
-    public MuteData get(UUID uuid) { return storage.get(uuid); }
+    public PunishmentData get(UUID uuid) { return storage.get(uuid); }
     public java.util.List<String> suggestNames(String prefix) { return storage.suggestNames(prefix); }
 
     public boolean isLoaded(UUID uuid) {
@@ -35,56 +35,58 @@ public final class MuteManager {
         return state != null && state.ready();
     }
 
-    public MuteData getOnline(UUID uuid) {
+    public PunishmentData getOnline(UUID uuid) {
         OnlineMute state = online.get(uuid);
-        MuteData mute = state == null ? null : state.data();
+        PunishmentData mute = state == null ? null : state.data();
         return mute != null && !mute.expired() ? mute : null;
     }
 
-    public CompletableFuture<MuteData> loadOnline(UUID uuid) {
+    public CompletableFuture<JoinPunishments> loadForJoin(UUID uuid) {
         OnlineMute loading = new OnlineMute(false, null);
         online.put(uuid, loading);
-        return executor.submit(() -> storage.get(uuid)).thenApply(data -> {
-            online.computeIfPresent(uuid, (id, current) -> current == loading ? new OnlineMute(true, data) : current);
+        return executor.submit(() -> storage.getForJoin(uuid)).thenApply(data -> {
+            if (data.ban() == null) {
+                online.computeIfPresent(uuid, (id, current) -> current == loading ? new OnlineMute(true, data.mute()) : current);
+            }
             return data;
         });
     }
 
-    public void updateOnline(UUID uuid, MuteData data) {
+    public void updateOnline(UUID uuid, PunishmentData data) {
         online.computeIfPresent(uuid, (id, current) -> new OnlineMute(true, data));
     }
 
-    public void updateOnlineFromSync(UUID uuid, MuteData data, long expectedRevision) {
+    public void updateOnlineFromSync(UUID uuid, PunishmentData data, long expectedRevision) {
         online.computeIfPresent(uuid, (id, current) -> storage.revision() == expectedRevision
                 ? new OnlineMute(true, data) : current);
     }
 
     public void forgetOnline(UUID uuid) { online.remove(uuid); }
 
-    private record OnlineMute(boolean ready, MuteData data) {}
+    private record OnlineMute(boolean ready, PunishmentData data) {}
 
-    public String muteNotice(MuteData data) {
+    public String muteNotice(PunishmentData data) {
         String path = data.expires() == null
                 ? "messages.mute-notice"
                 : "messages.tempmute-notice";
         return renderMessage(path, data);
     }
 
-    public String muteReminder(MuteData data) {
+    public String muteReminder(PunishmentData data) {
         String path = data.expires() == null
                 ? "messages.mute-reminder-permanent"
                 : "messages.mute-reminder";
         return renderMessage(path, data);
     }
 
-    public String mutedChatMessage(MuteData data) {
+    public String mutedChatMessage(PunishmentData data) {
         String path = data.expires() == null
                 ? "messages.muted-chat-permanent"
                 : "messages.muted-chat";
         return renderMessage(path, data);
     }
 
-    private String renderMessage(String path, MuteData data) {
+    private String renderMessage(String path, PunishmentData data) {
         return plugin.messages().get(path)
                 .replace("%player%", data.name() == null ? "" : data.name())
                 .replace("%reason%", data.reason() == null ? "" : data.reason())
@@ -92,13 +94,13 @@ public final class MuteManager {
     }
 
     public CompletableFuture<PunishmentResult> mute(UUID uuid, String name, String reason, String source) {
-        return run(() -> save(new MuteData(uuid, name, reason, source, null),
+        return run(() -> save(new PunishmentData(uuid, name, reason, source, null),
                 PunishmentType.MUTE, null));
     }
 
     public CompletableFuture<PunishmentResult> tempMute(UUID uuid, String name, String reason,
                                                         String source, long seconds) {
-        return run(() -> save(new MuteData(uuid, name, reason, source, Instant.now().plusSeconds(seconds)),
+        return run(() -> save(new PunishmentData(uuid, name, reason, source, Instant.now().plusSeconds(seconds)),
                 PunishmentType.TEMPMUTE, seconds));
     }
 
@@ -110,7 +112,7 @@ public final class MuteManager {
         });
     }
 
-    private PunishmentResult save(MuteData data, PunishmentType type, Long durationSeconds) {
+    private PunishmentResult save(PunishmentData data, PunishmentType type, Long durationSeconds) {
         PunishmentResult result = storage.putAndLog(data, type, durationSeconds, logger);
         if (result == PunishmentResult.SUCCESS) updateOnline(data.uniqueId(), data);
         return result;

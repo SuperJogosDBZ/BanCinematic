@@ -4,15 +4,15 @@ import java.time.Instant;
 import java.util.Objects;
 import java.util.UUID;
 
-public record BanData(
+public record PunishmentData(
         UUID uniqueId,
         String name,
         String reason,
         String source,
         Instant expires
 ) {
-    public BanData {
-        Objects.requireNonNull(uniqueId, "A UUID do jogador é obrigatória para um banimento.");
+    public PunishmentData {
+        Objects.requireNonNull(uniqueId, "A UUID do jogador é obrigatória para uma punição.");
     }
 
     public boolean permanent() { return expires == null; }

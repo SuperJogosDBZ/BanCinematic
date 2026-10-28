@@ -51,7 +51,6 @@ public final class PunishmentTabListener implements Listener {
         } catch (Exception error) {
             result.cancel(false);
             if (error instanceof InterruptedException) Thread.currentThread().interrupt();
-            // A falta de sugestões não deve gerar mensagens nem expor dados de armazenamento.
         }
     }
 }

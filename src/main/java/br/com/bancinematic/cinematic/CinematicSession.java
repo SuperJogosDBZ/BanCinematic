@@ -97,7 +97,6 @@ public final class CinematicSession {
         this.impactCameraPitch = pitch;
     }
 
-
     public Phase phase() { return phase; }
     public void phase(Phase phase) {
         this.phase = phase;

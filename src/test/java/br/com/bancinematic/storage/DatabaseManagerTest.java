@@ -1,7 +1,7 @@
 package br.com.bancinematic.storage;
 
 import br.com.bancinematic.BanCinematicPlugin;
-import br.com.bancinematic.punishment.BanData;
+import br.com.bancinematic.punishment.PunishmentData;
 import br.com.bancinematic.punishment.PunishmentType;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.BeforeEach;
@@ -186,10 +186,10 @@ class DatabaseManagerTest {
         DatabaseManager database = spy(new DatabaseManager(plugin));
         doReturn(physical).when(database).connect();
         try (database) {
-            BanStorage bans = new BanStorage(plugin, database);
+            PunishmentStorage bans = new PunishmentStorage(plugin, database, PunishmentStorage.Kind.BAN);
             PunishmentLogger history = new PunishmentLogger(plugin, database);
             UUID uuid = UUID.randomUUID();
-            assertEquals(br.com.bancinematic.punishment.PunishmentResult.SUCCESS, bans.putAndLog(new BanData(uuid, "Alvo", "regra", "CONSOLE", null),
+            assertEquals(br.com.bancinematic.punishment.PunishmentResult.SUCCESS, bans.putAndLog(new PunishmentData(uuid, "Alvo", "regra", "CONSOLE", null),
                     PunishmentType.BAN, null, history));
             assertTrue(physical.getAutoCommit());
             UUID kickId = UUID.randomUUID();

@@ -1,7 +1,8 @@
 package br.com.bancinematic.storage;
 
 import br.com.bancinematic.BanCinematicPlugin;
-import br.com.bancinematic.punishment.MuteData;
+import br.com.bancinematic.punishment.PunishmentData;
+import br.com.bancinematic.punishment.JoinPunishments;
 import br.com.bancinematic.punishment.PunishmentResult;
 import br.com.bancinematic.punishment.PunishmentType;
 import java.sql.Connection;
@@ -12,35 +13,77 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
 
-public final class MuteStorage {
+public final class PunishmentStorage {
+    public enum Kind {
+        BAN("ban_records"), MUTE("mute_records");
+
+        private final String table;
+        Kind(String table) { this.table = table; }
+    }
+
     private final BanCinematicPlugin plugin;
     private final DatabaseManager database;
+    private final Kind kind;
     private volatile long revision;
 
     public long revision() { return revision; }
-    public MuteStorage(BanCinematicPlugin plugin, DatabaseManager database) {
+    public PunishmentStorage(BanCinematicPlugin plugin, DatabaseManager database, Kind kind) {
         this.plugin = plugin;
         this.database = database;
+        this.kind = java.util.Objects.requireNonNull(kind);
     }
 
-    /** Consulta SQL; chamar somente fora da thread principal. */
-    public MuteData get(UUID uuid) {
+    public PunishmentData get(UUID uuid) {
         if (uuid == null) return null;
         return find(java.util.List.of(uuid)).get(uuid);
     }
-
-
-    public Map<UUID, MuteData> find(java.util.Collection<UUID> ids) {
+    public JoinPunishments getForJoin(UUID uuid) {
+        java.util.Objects.requireNonNull(uuid);
+        try {
+            return database.execute(connection -> {
+                try (PreparedStatement statement = connection.prepareStatement(database.sql(
+                        "SELECT 'BAN' AS kind, name, reason, source, expires_at FROM ban_records"
+                                + " WHERE subject_uuid = ? AND (expires_at IS NULL OR expires_at > ?)"
+                                + " UNION ALL SELECT 'MUTE' AS kind, name, reason, source, expires_at FROM mute_records"
+                                + " WHERE subject_uuid = ? AND (expires_at IS NULL OR expires_at > ?)"))) {
+                    long now = Instant.now().toEpochMilli();
+                    statement.setString(1, uuid.toString());
+                    statement.setLong(2, now);
+                    statement.setString(3, uuid.toString());
+                    statement.setLong(4, now);
+                    PunishmentData ban = null;
+                    PunishmentData mute = null;
+                    try (ResultSet result = statement.executeQuery()) {
+                        while (result.next()) {
+                            long expiry = result.getLong("expires_at");
+                            Instant expires = result.wasNull() ? null : Instant.ofEpochMilli(expiry);
+                            PunishmentData data = new PunishmentData(uuid, result.getString("name"), result.getString("reason"),
+                                    result.getString("source"), expires);
+                            if ("BAN".equals(result.getString("kind"))) {
+                                ban = data;
+                            } else {
+                                mute = data;
+                            }
+                        }
+                    }
+                    return new JoinPunishments(ban, mute);
+                }
+            });
+        } catch (SQLException error) {
+            throw new IllegalStateException("Não foi possível consultar as punições na entrada.", error);
+        }
+    }
+    public Map<UUID, PunishmentData> find(java.util.Collection<UUID> ids) {
         if (ids.isEmpty()) return Map.of();
         var keys = java.util.List.copyOf(ids);
         try {
             return database.execute(connection -> {
-                Map<UUID, MuteData> found = new java.util.HashMap<>();
+                Map<UUID, PunishmentData> found = new java.util.HashMap<>();
                 for (int offset = 0; offset < keys.size(); offset += 100) {
                     var batch = keys.subList(offset, Math.min(keys.size(), offset + 100));
                     String placeholders = String.join(",", java.util.Collections.nCopies(batch.size(), "?"));
                     try (PreparedStatement statement = connection.prepareStatement(database.sql(
-                            "SELECT subject_uuid, name, reason, source, expires_at FROM mute_records"
+                            "SELECT subject_uuid, name, reason, source, expires_at FROM " + kind.table
                                     + " WHERE subject_uuid IN (" + placeholders + ")"
                                     + " AND (expires_at IS NULL OR expires_at > ?)"))) {
                         int index = 1;
@@ -51,7 +94,7 @@ public final class MuteStorage {
                                 UUID id = UUID.fromString(result.getString("subject_uuid"));
                                 long expiry = result.getLong("expires_at");
                                 Instant expires = result.wasNull() ? null : Instant.ofEpochMilli(expiry);
-                                found.put(id, new MuteData(id, result.getString("name"), result.getString("reason"),
+                                found.put(id, new PunishmentData(id, result.getString("name"), result.getString("reason"),
                                         result.getString("source"), expires));
                             }
                         }
@@ -60,7 +103,7 @@ public final class MuteStorage {
                 return found;
             });
         } catch (SQLException error) {
-            throw new IllegalStateException("Não foi possível consultar mute_records.", error);
+            throw new IllegalStateException("Não foi possível consultar " + kind.table + ".", error);
         }
     }
 
@@ -71,7 +114,7 @@ public final class MuteStorage {
             return database.execute(connection -> {
                 var names = new java.util.ArrayList<String>();
                 try (PreparedStatement statement = connection.prepareStatement(database.sql(
-                        "SELECT DISTINCT name FROM mute_records WHERE name LIKE ? ESCAPE '!'"
+                        "SELECT DISTINCT name FROM " + kind.table + " WHERE name LIKE ? ESCAPE '!'"
                                 + " AND (expires_at IS NULL OR expires_at > ?) ORDER BY name LIMIT 100"))) {
                     statement.setString(1, escaped + "%");
                     statement.setLong(2, Instant.now().toEpochMilli());
@@ -83,24 +126,24 @@ public final class MuteStorage {
                 return names;
             });
         } catch (SQLException error) {
-            throw new IllegalStateException("Não foi possível sugerir nomes de mute_records.", error);
+            throw new IllegalStateException("Não foi possível sugerir nomes de " + kind.table + ".", error);
         }
     }
 
-    public synchronized boolean put(MuteData data) {
+    public synchronized boolean put(PunishmentData data) {
         return save(data, null, null, null) == PunishmentResult.SUCCESS;
     }
 
-    public synchronized PunishmentResult putAndLog(MuteData data, PunishmentType type, Long durationSeconds,
+    public synchronized PunishmentResult putAndLog(PunishmentData data, PunishmentType type, Long durationSeconds,
                                                     PunishmentLogger history) {
         return save(data, type, durationSeconds, history);
     }
 
-    private PunishmentResult save(MuteData data, PunishmentType type, Long durationSeconds, PunishmentLogger history) {
+    private PunishmentResult save(PunishmentData data, PunishmentType type, Long durationSeconds, PunishmentLogger history) {
         try {
             PunishmentResult result = database.transaction(connection -> {
                 try (PreparedStatement expired = connection.prepareStatement(database.sql(
-                        "DELETE FROM mute_records WHERE subject_uuid = ? AND expires_at IS NOT NULL AND expires_at <= ?"))) {
+                        "DELETE FROM " + kind.table + " WHERE subject_uuid = ? AND expires_at IS NOT NULL AND expires_at <= ?"))) {
                     expired.setString(1, data.uniqueId().toString());
                     expired.setLong(2, Instant.now().toEpochMilli());
                     expired.executeUpdate();
@@ -115,10 +158,13 @@ public final class MuteStorage {
                 if (history != null) history.log(connection, type, data.uniqueId(), data.name(), data.reason(), data.source(), durationSeconds);
                 return PunishmentResult.SUCCESS;
             });
-            if (result == PunishmentResult.SUCCESS) revision++;
+            if (result == PunishmentResult.SUCCESS) {
+                revision++;
+                if (history != null) history.logConsole(type, data.uniqueId(), data.name(), data.reason(), data.source(), durationSeconds);
+            }
             return result;
         } catch (SQLException error) {
-            plugin.getLogger().severe("Não foi possível salvar mute e histórico: " + error.getMessage());
+            plugin.getLogger().severe("Não foi possível salvar punição em " + kind.table + " e histórico: " + error.getMessage());
             return PunishmentResult.STORAGE_ERROR;
         }
     }
@@ -129,7 +175,7 @@ public final class MuteStorage {
         try {
             PunishmentResult result = database.transaction(connection -> {
                 try (PreparedStatement statement = connection.prepareStatement(database.sql(
-                        "DELETE FROM mute_records WHERE subject_uuid = ? AND (expires_at IS NULL OR expires_at > ?)"))) {
+                        "DELETE FROM " + kind.table + " WHERE subject_uuid = ? AND (expires_at IS NULL OR expires_at > ?)"))) {
                     statement.setString(1, uuid.toString());
                     statement.setLong(2, Instant.now().toEpochMilli());
                     if (statement.executeUpdate() == 0) return PunishmentResult.NOT_ACTIVE;
@@ -138,9 +184,10 @@ public final class MuteStorage {
                 return PunishmentResult.SUCCESS;
             });
             revision++;
+            if (result == PunishmentResult.SUCCESS) history.logConsole(type, uuid, player, reason, source, null);
             return result;
         } catch (SQLException error) {
-            plugin.getLogger().severe("Não foi possível remover mute e salvar histórico: " + error.getMessage());
+            plugin.getLogger().severe("Não foi possível remover punição de " + kind.table + " e salvar histórico: " + error.getMessage());
             return PunishmentResult.STORAGE_ERROR;
         }
     }
@@ -149,20 +196,20 @@ public final class MuteStorage {
         try {
             database.execute(connection -> {
                 try (PreparedStatement statement = connection.prepareStatement(database.sql(
-                        "DELETE FROM mute_records WHERE expires_at IS NOT NULL AND expires_at <= ?"))) {
+                        "DELETE FROM " + kind.table + " WHERE expires_at IS NOT NULL AND expires_at <= ?"))) {
                     statement.setLong(1, Instant.now().toEpochMilli());
                     statement.executeUpdate();
                 }
                 return null;
             });
         } catch (SQLException error) {
-            plugin.getLogger().warning("Não foi possível limpar mutes expirados: " + error.getMessage());
+            plugin.getLogger().warning("Não foi possível limpar punições expiradas de " + kind.table + ": " + error.getMessage());
         }
     }
 
-    private void insert(Connection connection, MuteData data) throws SQLException {
+    private void insert(Connection connection, PunishmentData data) throws SQLException {
         try (PreparedStatement statement = connection.prepareStatement(database.sql(
-                "INSERT INTO mute_records (subject_uuid, name, reason, source, expires_at) VALUES (?, ?, ?, ?, ?)"))) {
+                "INSERT INTO " + kind.table + " (subject_uuid, name, reason, source, expires_at) VALUES (?, ?, ?, ?, ?)"))) {
             statement.setString(1, data.uniqueId().toString());
             statement.setString(2, data.name());
             statement.setString(3, data.reason());

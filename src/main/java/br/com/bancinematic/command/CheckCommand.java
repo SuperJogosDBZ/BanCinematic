@@ -54,7 +54,7 @@ public final class CheckCommand implements CommandExecutor {
     }
 
     private record Result(br.com.bancinematic.storage.IdentityStorage.Identity identity,
-                          br.com.bancinematic.punishment.BanData ban, br.com.bancinematic.punishment.MuteData mute) {}
+                          br.com.bancinematic.punishment.PunishmentData ban, br.com.bancinematic.punishment.PunishmentData mute) {}
 
     private void punishment(CommandSender sender, String key, String reason, String source, Instant expires) {
         send(sender, key, "%reason%", reason, "%source%", source, "%time%",

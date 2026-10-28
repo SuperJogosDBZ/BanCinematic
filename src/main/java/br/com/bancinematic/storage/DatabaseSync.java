@@ -8,19 +8,17 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public final class DatabaseSync implements Runnable {
     private final BanCinematicPlugin plugin;
-    private final BanStorage bans;
-    private final MuteStorage mutes;
-    private final IdentityStorage identities;
+    private final PunishmentStorage bans;
+    private final PunishmentStorage mutes;
     private final BanCinematic cinematic;
     private final br.com.bancinematic.punishment.MuteManager muteManager;
     private final AtomicBoolean pending = new AtomicBoolean();
 
-    public DatabaseSync(BanCinematicPlugin plugin, BanStorage bans, MuteStorage mutes,
-                        IdentityStorage identities, br.com.bancinematic.punishment.MuteManager muteManager, BanCinematic cinematic) {
+    public DatabaseSync(BanCinematicPlugin plugin, PunishmentStorage bans, PunishmentStorage mutes,
+                        br.com.bancinematic.punishment.MuteManager muteManager, BanCinematic cinematic) {
         this.plugin = plugin;
         this.bans = bans;
         this.mutes = mutes;
-        this.identities = identities;
         this.cinematic = cinematic;
         this.muteManager = muteManager;
     }
@@ -44,7 +42,6 @@ public final class DatabaseSync implements Runnable {
             long banRevision = bans.revision(), muteRevision = mutes.revision();
             var onlineBans = bans.find(ids);
             var onlineMutes = mutes.find(ids);
-            identities.invalidate();
             plugin.runSync(() -> {
                 for (var player : players) {
                     if (!player.isOnline()) continue;

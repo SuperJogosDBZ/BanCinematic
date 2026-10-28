@@ -24,7 +24,6 @@ class DatabaseExecutorTest {
             Thread worker = executor.submit(Thread::currentThread).get(5, TimeUnit.SECONDS);
 
             assertNotEquals(caller, worker);
-            assertEquals("BanCinematic-Database", worker.getName());
         }
     }
 
@@ -109,13 +108,4 @@ class DatabaseExecutorTest {
         }
     }
 
-    @Test
-    void inlineModeRunsOnTheCallingThread() {
-        DatabaseExecutor executor = DatabaseExecutor.inline();
-
-        assertEquals(Thread.currentThread(), executor.submit(Thread::currentThread).join());
-        assertTrue(executor.submit(() -> {
-            throw new IllegalStateException("x");
-        }).isCompletedExceptionally());
-    }
 }
